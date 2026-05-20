@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>World Cup Oracle 2026 — Decoder of Hidden Predictions</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="container">
+    <header class="hero">
+      <h1>World Cup Oracle 2026</h1>
+      <p>Paste a sentence or seed a name — the oracle reads hidden predictions for the 48-team field.</p>
+    </header>
+
+    <div class="input-shell">
+      <div class="mode-tabs" role="tablist">
+        <button class="mode-tab active" data-mode="text" type="button">Scan Text</button>
+        <button class="mode-tab" data-mode="seed" type="button">Personal Seed</button>
+      </div>
+
+      <div id="text-panel">
+        <label class="field-label" for="text-input">Paste any text — tweet, headline, message</label>
+        <textarea id="text-input" placeholder="Brazilian samba meets Argentine tango on a German autobahn..."></textarea>
+      </div>
+
+      <div id="seed-panel" hidden>
+        <label class="field-label" for="seed-input">Enter a seed — name + birthday, lucky phrase, anything</label>
+        <input id="seed-input" type="text" placeholder="Lionel 24-06-1987" />
+      </div>
+
+      <div class="actions">
+        <span class="hint">Tip: ⌘/Ctrl + Enter to decode</span>
+        <button id="decode-btn" class="decode-btn" type="button">Decode</button>
+      </div>
+    </div>
+
+    <div id="output"></div>
+
+    <footer class="foot">
+      Deterministic readings · 96 years of finals baked in · for amusement, not for betting.
+    </footer>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
