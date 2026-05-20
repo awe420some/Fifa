@@ -1,0 +1,82 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0a1a14"/>
+      <stop offset="55%" stop-color="#0f2a20"/>
+      <stop offset="100%" stop-color="#14402f"/>
+    </linearGradient>
+    <linearGradient id="title" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#00d97e"/>
+      <stop offset="100%" stop-color="#ffd166"/>
+    </linearGradient>
+    <radialGradient id="glowA" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0%" stop-color="#00d97e" stop-opacity="0.32"/>
+      <stop offset="100%" stop-color="#00d97e" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowB" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0%" stop-color="#ffd166" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="#ffd166" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <circle cx="180" cy="120" r="320" fill="url(#glowA)"/>
+  <circle cx="1040" cy="540" r="300" fill="url(#glowB)"/>
+
+  <!-- Subtle pitch lines -->
+  <g stroke="#1f4d39" stroke-width="1" opacity="0.55" fill="none">
+    <rect x="80" y="80" width="1040" height="470" rx="14"/>
+    <line x1="600" y1="80" x2="600" y2="550"/>
+    <circle cx="600" cy="315" r="80"/>
+  </g>
+
+  <!-- Trophy mark -->
+  <g transform="translate(600 195)">
+    <g fill="#ffd166" stroke="#00d97e" stroke-width="2">
+      <path d="M-58,-58 L58,-58 L58,-14 Q58,28 32,42 Q12,52 0,52 Q-12,52 -32,42 Q-58,28 -58,-14 Z"/>
+      <path d="M-58,-44 Q-88,-44 -88,-12 Q-88,16 -64,22" fill="none"/>
+      <path d="M58,-44 Q88,-44 88,-12 Q88,16 64,22" fill="none"/>
+      <rect x="-6" y="52" width="12" height="22"/>
+      <rect x="-36" y="74" width="72" height="10" rx="3"/>
+      <rect x="-46" y="84" width="92" height="6" rx="2"/>
+    </g>
+    <text x="0" y="6" text-anchor="middle" fill="#0a1a14" font-family="-apple-system, Segoe UI, Roboto, sans-serif" font-size="32" font-weight="900">26</text>
+  </g>
+
+  <!-- Title -->
+  <text x="600" y="380" text-anchor="middle" fill="url(#title)"
+        font-family="-apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif"
+        font-size="86" font-weight="900" letter-spacing="2">WORLD CUP ORACLE</text>
+
+  <!-- Year strip -->
+  <g transform="translate(600 430)">
+    <line x1="-200" y1="0" x2="-70" y2="0" stroke="#00d97e" stroke-width="2"/>
+    <line x1="70" y1="0" x2="200" y2="0" stroke="#00d97e" stroke-width="2"/>
+    <text x="0" y="12" text-anchor="middle" fill="#00d97e"
+          font-family="-apple-system, Segoe UI, Roboto, sans-serif"
+          font-size="42" font-weight="700" letter-spacing="10">2 0 2 6</text>
+  </g>
+
+  <!-- Subtitle -->
+  <text x="600" y="495" text-anchor="middle" fill="#7fa896"
+        font-family="-apple-system, Segoe UI, Roboto, sans-serif"
+        font-size="22" font-weight="500" letter-spacing="0.5">
+    Decoder of Hidden Predictions · 48 teams · 96 years of finals
+  </text>
+
+  <!-- Footer chips -->
+  <g font-family="-apple-system, Segoe UI, Roboto, sans-serif" font-size="16" font-weight="600">
+    <g transform="translate(380 550)">
+      <rect x="-72" y="-18" width="144" height="32" rx="16" fill="rgba(0,217,126,0.12)" stroke="#00d97e" stroke-opacity="0.45"/>
+      <text x="0" y="4" text-anchor="middle" fill="#00d97e">DETERMINISTIC</text>
+    </g>
+    <g transform="translate(600 550)">
+      <rect x="-72" y="-18" width="144" height="32" rx="16" fill="rgba(255,209,102,0.10)" stroke="#ffd166" stroke-opacity="0.45"/>
+      <text x="0" y="4" text-anchor="middle" fill="#ffd166">FOR FUN</text>
+    </g>
+    <g transform="translate(820 550)">
+      <rect x="-72" y="-18" width="144" height="32" rx="16" fill="rgba(239,71,111,0.10)" stroke="#ef476f" stroke-opacity="0.45"/>
+      <text x="0" y="4" text-anchor="middle" fill="#ef476f">NO BETTING</text>
+    </g>
+  </g>
+</svg>

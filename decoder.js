@@ -155,8 +155,10 @@ export function pickQualifiers(groupTables) {
 }
 
 // Build a 32→1 knockout from the qualifier pool, ordered into a seeded bracket.
-export function buildKnockout(seed, qualifiers) {
-  // Seed-shuffle order so the bracket pairings differ per reading.
+// `overrides` is a map of "r-m" → team-code that forces that match's winner.
+// Downstream rounds re-simulate with the new pairings (different match seeds),
+// so a flip rewrites the whole bracket from that point onward.
+export function buildKnockout(seed, qualifiers, overrides = {}) {
   const ordered = seededShuffle(qualifiers, hash32(`${seed}|knockout-order`));
   const roundNames = ["roundR32", "roundR16", "roundQF", "roundSF", "roundFinal"];
   const rounds = [];
@@ -169,16 +171,27 @@ export function buildKnockout(seed, qualifiers) {
       const [a, b] = pairs[m];
       const ms = hash32(`${seed}|ko|${r}|${m}|${a.code}-${b.code}`);
       const result = simulateMatch(a, b, ms);
-      let winner;
+      let naturalWinner;
       if (result.scoreA === result.scoreB) {
         // Penalty shootout — coin flip biased by tier.
         const rng = mulberry32(ms ^ 0xdeadbeef);
         const strongA = a.tier <= b.tier;
-        winner = rng() < (strongA ? 0.6 : 0.4) ? a : b;
+        naturalWinner = rng() < (strongA ? 0.6 : 0.4) ? a : b;
       } else {
-        winner = result.scoreA > result.scoreB ? a : b;
+        naturalWinner = result.scoreA > result.scoreB ? a : b;
       }
-      matches.push({ a, b, scoreA: result.scoreA, scoreB: result.scoreB, winner });
+      const key = `${r}-${m}`;
+      const overrideCode = overrides[key];
+      let winner = naturalWinner;
+      let flipped = false;
+      if (overrideCode && overrideCode !== naturalWinner.code) {
+        const candidate = a.code === overrideCode ? a : (b.code === overrideCode ? b : null);
+        if (candidate) {
+          winner = candidate;
+          flipped = true;
+        }
+      }
+      matches.push({ a, b, scoreA: result.scoreA, scoreB: result.scoreB, winner, naturalWinner, flipped, key });
       winners.push(winner);
     }
     rounds.push({ name: roundNames[r], matches });
@@ -227,9 +240,53 @@ export function statisticalPrior(champion) {
   };
 }
 
+// Kickoff: opening match of the 2026 World Cup is June 11, 2026 (Mexico City).
+const KICKOFF_2026 = Date.UTC(2026, 5, 11); // month is 0-indexed (5 = June)
+
+function dateLens(iso, locale) {
+  // Accept YYYY-MM-DD; bail cleanly on anything else.
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!match) return { valid: false };
+  const y = Number(match[1]);
+  const mo = Number(match[2]);
+  const d = Number(match[3]);
+  const utc = Date.UTC(y, mo - 1, d);
+  const date = new Date(utc);
+  // Round-trip check catches things like Feb 30.
+  if (date.getUTCFullYear() !== y || date.getUTCMonth() + 1 !== mo || date.getUTCDate() !== d) {
+    return { valid: false };
+  }
+  const weekdayIdx = date.getUTCDay();
+  const digits = (match[1] + match[2] + match[3]).split("").map(Number);
+  let digitSum = digits.reduce((a, c) => a + c, 0);
+  while (digitSum > 9) {
+    digitSum = String(digitSum).split("").reduce((a, c) => a + Number(c), 0);
+  }
+  const dayMs = 86400000;
+  const daysToKickoff = Math.round((KICKOFF_2026 - utc) / dayMs);
+  return {
+    valid: true,
+    iso,
+    year: y,
+    month: mo,
+    day: d,
+    weekdayIdx,
+    digitSum,
+    daysToKickoff,
+  };
+}
+
 // Orchestrator.
-export function decode({ text = "", seed = "", mode = "text", locale = "en" }) {
-  const effective = (mode === "text" ? text : seed).trim();
+export function decode({ text = "", seed = "", date = "", mode = "text", locale = "en", koOverrides = {} }) {
+  let effective = "";
+  let dateInfo = null;
+  if (mode === "text") effective = text.trim();
+  else if (mode === "seed") effective = seed.trim();
+  else if (mode === "date") {
+    dateInfo = dateLens(date, locale);
+    if (!dateInfo.valid) return { empty: true, dateInvalid: true };
+    effective = date.trim();
+  }
   if (!effective) return { empty: true };
 
   const hidden = findHiddenCountries(effective, TEAMS_2026);
@@ -238,7 +295,7 @@ export function decode({ text = "", seed = "", mode = "text", locale = "en" }) {
   const teamsByCode = Object.fromEntries(TEAMS_2026.map((t) => [t.code, t]));
   const groupTables = simulateGroupStage(hash32(effective), GROUPS_2026, teamsByCode);
   const qualifiers = pickQualifiers(groupTables);
-  const knockout = buildKnockout(hash32(effective), qualifiers);
+  const knockout = buildKnockout(hash32(effective), qualifiers, koOverrides);
 
   const omen = historicalOmen(effective, knockout.champion, locale);
   const prior = statisticalPrior(knockout.champion);
@@ -248,11 +305,17 @@ export function decode({ text = "", seed = "", mode = "text", locale = "en" }) {
   if (hidden.direct.includes(knockout.champion.name)) confidence += 15;
   if (hidden.acrostic.includes(knockout.champion.name)) confidence += 5;
   confidence += Math.min(prior.championTitles * 2, 10);
+  // What-if forks aren't oracle visions — they're hypotheticals. Cap & dampen.
+  const flips = Object.keys(koOverrides).length;
+  if (flips > 0) {
+    confidence = Math.max(15, confidence - flips * 12);
+  }
   confidence = Math.min(confidence, 99);
 
   return {
     empty: false,
     seed: effective,
+    mode,
     hidden,
     numerology,
     groupTables,
@@ -260,5 +323,7 @@ export function decode({ text = "", seed = "", mode = "text", locale = "en" }) {
     omen,
     prior,
     confidence,
+    dateInfo,
+    flips,
   };
 }
