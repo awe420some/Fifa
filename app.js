@@ -1,53 +1,43 @@
-import { decode } from "./decoder.js";
-import { I18N, NAMES_DE } from "./data.js";
+// UI orchestrator for the data-driven 2026 forecast.
+import {
+  TEAMS_2026, GROUPS_2026, ELO_2026, ELO_2026_META,
+  MARKET_ODDS_2026, MARKET_ODDS_2026_META,
+  HISTORICAL_KNOCKOUTS, HISTORICAL_ELO, HISTORICAL_ELO_META,
+  WINNERS_1930_2022, STATS, NAMES_DE, I18N, DATA_SOURCES,
+} from "./data.js";
+import { runMonteCarlo, runKnockoutBacktest } from "./predictor.js";
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => [...document.querySelectorAll(sel)];
 
-const HISTORY_KEY = "oracle:history:v1";
-const HISTORY_MAX = 20;
+const ITERATIONS = 10000;
+const BACKTEST_ITERATIONS = 2000;
 
 const state = {
-  mode: "text",
   locale: "en",
-  lastResult: null,
-  koOverrides: {},
-  history: loadHistory(),
+  mc: null,            // 2026 Monte-Carlo result
+  backtest: null,      // backtest result
+  showAll: false,
 };
 
-const teamName = (name) => (state.locale === "de" && NAMES_DE[name]) || name;
 const t = () => I18N[state.locale];
+const teamByCode = Object.fromEntries(TEAMS_2026.map((x) => [x.code, x]));
+const hostCodes = TEAMS_2026.filter((x) => x.host).map((x) => x.code);
+
+const teamName = (code) => {
+  const t = teamByCode[code];
+  if (!t) return code;
+  return state.locale === "de" && NAMES_DE[t.name] ? NAMES_DE[t.name] : t.name;
+};
 
 function escape(str) {
   return String(str).replace(/[&<>"']/g, (c) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#39;",
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   })[c]);
 }
 
-function setMode(mode) {
-  state.mode = mode;
-  state.koOverrides = {};
-  $$(".mode-tab").forEach((el) => el.classList.toggle("active", el.dataset.mode === mode));
-  $("#text-panel").hidden = mode !== "text";
-  $("#seed-panel").hidden = mode !== "seed";
-  $("#date-panel").hidden = mode !== "date";
-}
-
-function setLocale(locale) {
-  state.locale = locale;
-  document.documentElement.lang = locale;
-  $$(".lang-btn").forEach((el) => el.classList.toggle("active", el.dataset.lang === locale));
-  applyI18n();
-  if (state.lastResult && !state.lastResult.empty) {
-    run({ skipUrlUpdate: true });
-  } else if (state.lastResult && state.lastResult.empty) {
-    render(state.lastResult);
-  }
-  renderHistory();
+function pct(p, digits = 1) {
+  return `${(p * 100).toFixed(digits)}%`;
 }
 
 function applyI18n() {
@@ -56,482 +46,269 @@ function applyI18n() {
     const key = el.getAttribute("data-i18n");
     if (typeof dict[key] === "string") el.textContent = dict[key];
   });
-  $$("[data-i18n-attr]").forEach((el) => {
-    const spec = el.getAttribute("data-i18n-attr");
-    const [attr, key] = spec.split(":");
-    if (typeof dict[key] === "string") el.setAttribute(attr, dict[key]);
-  });
-  document.title = `${dict.title} — Decoder of Hidden Predictions`;
+  document.title = dict.title;
+  $("#snapshot-line").textContent = dict.snapshot(ELO_2026_META.asOf);
+  $("#footer-line").textContent = dict.footer;
 }
 
-function renderHidden(hidden) {
+/* ─────────── Render: Top 3 ─────────── */
+
+function renderTop3() {
   const dict = t();
-  if (!hidden.direct.length && !hidden.acrostic.length) {
-    return `<p class="muted">${escape(dict.hiddenNone)}</p>`;
-  }
-  const direct = hidden.direct.length
-    ? `<div><strong>${escape(dict.hiddenDirect)}:</strong> ${hidden.direct.map((n) => `<span class="chip">${escape(teamName(n))}</span>`).join("")}</div>`
-    : "";
-  const acrostic = hidden.acrostic.length
-    ? `<div><strong>${escape(dict.hiddenAcrostic)}:</strong> ${hidden.acrostic.map((n) => `<span class="chip alt">${escape(teamName(n))}</span>`).join("")}</div>`
-    : "";
-  return direct + acrostic;
+  const ranked = Object.entries(state.mc.titleProbability)
+    .map(([code, p]) => ({ code, p }))
+    .sort((a, b) => b.p - a.p);
+  const top3 = ranked.slice(0, 3);
+  $("#top3").innerHTML = top3.map((row, i) => `
+    <div class="top-card top-rank-${i + 1}">
+      <div class="top-rank">${i + 1}</div>
+      <div class="top-team">${escape(teamName(row.code))}</div>
+      <div class="top-meta">${escape(teamByCode[row.code]?.confederation || "")}</div>
+      <div class="top-prob">${pct(row.p, 1)}</div>
+      <div class="top-bar"><div class="top-bar-fill" style="width:${Math.min(100, row.p * 300)}%"></div></div>
+      <div class="top-sub">
+        <span>SF ${pct(state.mc.semisProbability[row.code] || 0, 0)}</span>
+        <span>QF ${pct(state.mc.quartersProbability[row.code] || 0, 0)}</span>
+      </div>
+    </div>
+  `).join("");
 }
 
-function renderNumerology(n) {
+/* ─────────── Render: Full distribution ─────────── */
+
+function renderDistribution() {
   const dict = t();
-  if (!n.team) return `<p class="muted">${escape(dict.numerologyNone)}</p>`;
-  return `
-    <p>${dict.numerologySum(n.sum, n.letters)}</p>
-    <p>${escape(dict.numerologyLucky)}: <strong class="lucky">${n.luckyDigit}</strong></p>
-    <p>${dict.numerologyPick(escape(teamName(n.team.name)), escape(n.team.confederation), n.team.tier)}</p>
+  const ranked = Object.entries(state.mc.titleProbability)
+    .map(([code, p]) => ({
+      code, p,
+      semi: state.mc.semisProbability[code] || 0,
+      advance: state.mc.groupAdvanceProbability[code] || 0,
+    }))
+    .sort((a, b) => b.p - a.p);
+  const visible = state.showAll ? ranked : ranked.slice(0, 12);
+  const maxP = ranked[0]?.p || 0.01;
+  $("#distribution").innerHTML = visible.map((r) => `
+    <div class="dist-row">
+      <div class="dist-team">${escape(teamName(r.code))}</div>
+      <div class="dist-bar"><div class="dist-fill" style="width:${(r.p / maxP) * 100}%"></div></div>
+      <div class="dist-prob">${pct(r.p, r.p < 0.01 ? 2 : 1)}</div>
+      <div class="dist-extra muted">SF ${pct(r.semi, 0)} · Adv ${pct(r.advance, 0)}</div>
+    </div>
+  `).join("");
+  const btn = $("#toggle-distribution");
+  btn.textContent = state.showAll ? dict.hideAll : dict.showAll;
+}
+
+/* ─────────── Render: Model vs Market ─────────── */
+
+function renderMarket() {
+  const dict = t();
+  const teams = TEAMS_2026.map((team) => ({
+    code: team.code,
+    model: state.mc.titleProbability[team.code] || 0,
+    market: MARKET_ODDS_2026[team.code] || 0,
+  }));
+  // Top 15 by max(model, market)
+  const top = teams.sort((a, b) => Math.max(b.model, b.market) - Math.max(a.model, a.market)).slice(0, 15);
+  const maxV = Math.max(...top.flatMap((x) => [x.model, x.market]));
+  $("#market").innerHTML = `
+    <div class="market-head muted">
+      <span></span>
+      <span><span class="legend-dot legend-model"></span>${escape(dict.modelLabel)}</span>
+      <span><span class="legend-dot legend-market"></span>${escape(dict.marketLabel)}</span>
+    </div>
+    ${top.map((r) => `
+      <div class="market-row">
+        <div class="market-team">${escape(teamName(r.code))}</div>
+        <div class="market-bars">
+          <div class="market-bar"><div class="market-fill model" style="width:${(r.model / maxV) * 100}%"></div><span class="market-val">${pct(r.model, 1)}</span></div>
+          <div class="market-bar"><div class="market-fill market" style="width:${(r.market / maxV) * 100}%"></div><span class="market-val">${pct(r.market, 1)}</span></div>
+        </div>
+      </div>
+    `).join("")}
   `;
+  const r = pearsonCorrelation(top.map((x) => x.model), top.map((x) => x.market));
+  $("#market-summary").innerHTML = dict.correlation(r.toFixed(2));
 }
 
-function renderGroupStage(groupTables) {
-  const dict = t();
-  const cols = dict.standingsCols;
-  const cards = Object.entries(groupTables).map(([letter, table]) => {
-    const rows = table.map((row, i) => `
-      <tr class="${i < 2 ? "advance" : i === 2 ? "third" : "out"}">
-        <td>${i + 1}</td>
-        <td>${escape(teamName(row.team.name))}</td>
-        <td>${row.p}</td>
-        <td>${row.gd > 0 ? "+" : ""}${row.gd}</td>
-      </tr>
-    `).join("");
+function pearsonCorrelation(xs, ys) {
+  const n = xs.length;
+  const mx = xs.reduce((a, b) => a + b, 0) / n;
+  const my = ys.reduce((a, b) => a + b, 0) / n;
+  let num = 0, dx = 0, dy = 0;
+  for (let i = 0; i < n; i++) {
+    const xd = xs[i] - mx;
+    const yd = ys[i] - my;
+    num += xd * yd;
+    dx += xd * xd;
+    dy += yd * yd;
+  }
+  if (dx === 0 || dy === 0) return 0;
+  return num / Math.sqrt(dx * dy);
+}
+
+/* ─────────── Render: Expected groups ─────────── */
+
+function renderGroups() {
+  const html = Object.entries(GROUPS_2026).map(([letter, codes]) => {
+    const rows = codes.map((code) => {
+      const gp = state.mc.groupPositionDistribution[code];
+      if (!gp || gp.total === 0) return { code, avg: 4 };
+      const avg = (gp.p1 * 1 + gp.p2 * 2 + gp.p3 * 3 + gp.p4 * 4) / gp.total;
+      const adv = (gp.p1 + gp.p2) / gp.total;
+      return { code, avg, adv };
+    }).sort((a, b) => a.avg - b.avg);
     return `
       <div class="group-card">
-        <h4>${escape(dict.groupHeader(letter))}</h4>
+        <h4>Group ${letter}</h4>
         <table>
-          <thead><tr><th></th><th>${escape(cols.team)}</th><th>${escape(cols.pts)}</th><th>${escape(cols.gd)}</th></tr></thead>
-          <tbody>${rows}</tbody>
+          <thead><tr><th></th><th>Team</th><th>Ø Pos</th><th>Adv</th></tr></thead>
+          <tbody>
+            ${rows.map((r, i) => `
+              <tr class="${i < 2 ? "advance" : ""}">
+                <td>${i + 1}</td>
+                <td>${escape(teamName(r.code))}</td>
+                <td>${r.avg.toFixed(2)}</td>
+                <td>${pct(r.adv || 0, 0)}</td>
+              </tr>
+            `).join("")}
+          </tbody>
         </table>
       </div>
     `;
   }).join("");
-  return `<div class="group-grid">${cards}</div>`;
+  $("#groups").innerHTML = html;
 }
 
-function renderKnockout(knockout) {
+/* ─────────── Render: Backtest ─────────── */
+
+function renderBacktest() {
   const dict = t();
-  const cols = knockout.rounds.map((round) => {
-    const matches = round.matches.map((m) => {
-      const aWin = m.winner.code === m.a.code;
-      const bWin = m.winner.code === m.b.code;
-      const flipTag = m.flipped ? `<span class="ko-flip-tag" title="${escape(dict.whatIfBadge)}">${escape(dict.whatIfTag)}</span>` : "";
-      return `
-        <div class="ko-match${m.flipped ? " flipped" : ""}" data-match-key="${escape(m.key)}">
-          ${flipTag}
-          <button class="ko-team ${aWin ? "win" : ""}" data-match-key="${escape(m.key)}" data-team-code="${escape(m.a.code)}" type="button">
-            <span class="ko-name">${escape(teamName(m.a.name))}</span>
-            <span class="ko-score">${m.scoreA}</span>
-          </button>
-          <button class="ko-team ${bWin ? "win" : ""}" data-match-key="${escape(m.key)}" data-team-code="${escape(m.b.code)}" type="button">
-            <span class="ko-name">${escape(teamName(m.b.name))}</span>
-            <span class="ko-score">${m.scoreB}</span>
-          </button>
-        </div>
-      `;
-    }).join("");
-    return `<div class="ko-col"><h4>${escape(dict[round.name])}</h4>${matches}</div>`;
-  }).join("");
-  return `
-    <div class="ko-bracket">${cols}
-      <div class="ko-col champion-col">
-        <h4>${escape(dict.champion)}</h4>
-        <div class="ko-match champion">
-          <div class="ko-team win"><span class="ko-name">${escape(teamName(knockout.champion.name))}</span></div>
-          <div class="muted">${escape(knockout.champion.confederation)}</div>
-        </div>
+  const rows = state.backtest.perTournament.map((r) => {
+    if (r.skipped) return `
+      <div class="bt-row skipped">
+        <span class="bt-year">${r.year}</span>
+        <span class="bt-skipped muted">skipped (${escape(r.skipped)})</span>
       </div>
-    </div>
-  `;
-}
-
-function renderOmen(omen) {
-  return `<p>${escape(omen.text)}</p>`;
-}
-
-function renderPrior(prior, champion) {
-  const dict = t();
-  const leader = dict.titlesLeader(escape(teamName(prior.leader.nation)), prior.leader.count);
-  const champPart = prior.championTitles
-    ? dict.championTitled(escape(teamName(champion.name)), prior.championTitles)
-    : dict.championUntitled(escape(teamName(champion.name)));
-  return `
-    <ul>
-      <li>${leader}</li>
-      <li>${champPart}</li>
-      <li>${dict.hostNote(prior.hostWins, prior.totalTournaments)}</li>
-      <li>${dict.continental(prior.europeWins, prior.southAmericaWins)}</li>
-    </ul>
-  `;
-}
-
-function renderDateLens(info) {
-  const dict = t();
-  const weekday = dict.weekdays[info.weekdayIdx];
-  const lucky = info.digitSum;
-  let kickoffLine;
-  if (info.daysToKickoff > 0) kickoffLine = dict.dateOmenFuture(info.daysToKickoff);
-  else if (info.daysToKickoff === 0) kickoffLine = dict.dateAtKickoff;
-  else kickoffLine = `${Math.abs(info.daysToKickoff)} ${dict.dateKickoffPast}`;
-  return `
-    <ul>
-      <li><strong>${escape(dict.dateWeekday)}:</strong> ${escape(weekday)}</li>
-      <li><strong>${escape(dict.dateLuckyDigit)}:</strong> <span class="lucky">${lucky}</span></li>
-      <li>${escape(kickoffLine)}</li>
-    </ul>
-  `;
-}
-
-function renderVerdict(result) {
-  const dict = t();
-  const c = result.knockout.champion;
-  return `
-    <div class="verdict-card${result.flips > 0 ? " flipped" : ""}">
-      <div class="verdict-label">${escape(dict.verdictLabel)}${result.flips > 0 ? ` · <span class="whatif-pill">${escape(dict.whatIfTag)}</span>` : ""}</div>
-      <div class="verdict-champion">${escape(teamName(c.name))}</div>
-      <div class="verdict-meta">${escape(c.confederation)} · tier ${c.tier}</div>
-      <div class="verdict-bar"><div class="verdict-fill" style="width:0%"></div></div>
-      <div class="verdict-confidence">${result.confidence}% ${escape(dict.confidence)}</div>
-      <div class="verdict-actions">
-        <button id="copy-btn" class="copy-btn" type="button">${escape(dict.copyReading)}</button>
-        <button id="share-btn" class="copy-btn" type="button">${escape(dict.shareLink)}</button>
-        ${result.flips > 0 ? `<button id="whatif-reset" class="copy-btn warn" type="button">${escape(dict.whatIfReset)}</button>` : ""}
-      </div>
-    </div>
-  `;
-}
-
-function readingToText(result) {
-  const dict = t();
-  const c = result.knockout.champion;
-  return [
-    `🏆 ${dict.title}`,
-    `${dict.verdictLabel}: ${teamName(c.name)} (${c.confederation})`,
-    `${result.confidence}% ${dict.confidence}${result.flips > 0 ? ` (${dict.whatIfBadge})` : ""}`,
-    `${dict.sectionNumerology}: ${result.numerology.team ? teamName(result.numerology.team.name) : "—"} · ${dict.numerologyLucky} ${result.numerology.luckyDigit}`,
-    `${dict.sectionHidden}: ${result.hidden.direct.map(teamName).join(", ") || "—"}`,
-    `${dict.sectionOmen}: ${result.omen.text}`,
-    `Seed: ${result.seed.slice(0, 80)}${result.seed.length > 80 ? "…" : ""}`,
-  ].join("\n");
-}
-
-function currentInputValue() {
-  if (state.mode === "text") return $("#text-input").value;
-  if (state.mode === "seed") return $("#seed-input").value;
-  return $("#date-input").value;
-}
-
-function buildShareUrl() {
-  const value = currentInputValue();
-  if (!value.trim()) return location.href;
-  const encoded = btoa(unescape(encodeURIComponent(value))).replace(/=+$/, "");
-  const params = new URLSearchParams({ m: state.mode, l: state.locale, v: encoded });
-  return `${location.origin}${location.pathname}#${params.toString()}`;
-}
-
-function applyUrlState() {
-  if (!location.hash) return false;
-  const params = new URLSearchParams(location.hash.slice(1));
-  const m = params.get("m");
-  const l = params.get("l");
-  const v = params.get("v");
-  if (!v) return false;
-  let decoded;
-  try {
-    decoded = decodeURIComponent(escapeBin(atob(v)));
-  } catch {
-    return false;
-  }
-  if (l === "de" || l === "en") setLocale(l);
-  if (m === "text" || m === "seed" || m === "date") setMode(m);
-  if (state.mode === "text") $("#text-input").value = decoded;
-  else if (state.mode === "seed") $("#seed-input").value = decoded;
-  else $("#date-input").value = decoded;
-  return true;
-}
-
-function escapeBin(str) {
-  let out = "";
-  for (let i = 0; i < str.length; i++) {
-    const code = str.charCodeAt(i);
-    out += code < 128 ? str[i] : "%" + code.toString(16).padStart(2, "0").toUpperCase();
-  }
-  return out;
-}
-
-function render(result) {
-  const out = $("#output");
-  const dict = t();
-  if (result.empty) {
-    const msg = result.dateInvalid ? dict.dateInvalid : dict.nudge;
-    out.innerHTML = `<div class="card nudge"><p>${escape(msg)}</p></div>`;
-    return;
-  }
-  const dateLensCard = result.dateInfo
-    ? `<section class="card reveal" style="--delay:0.20s">
-         <h3>${escape(dict.sectionDateLens)}</h3>
-         ${renderDateLens(result.dateInfo)}
-       </section>`
-    : "";
-  const whatIfBanner = result.flips > 0
-    ? `<div class="whatif-banner">${escape(dict.whatIfBanner(result.flips))} <button id="whatif-reset-inline" class="copy-btn warn" type="button">${escape(dict.whatIfReset)}</button></div>`
-    : `<div class="whatif-hint muted">${escape(dict.whatIfHint)}</div>`;
-
-  out.innerHTML = `
-    ${renderVerdict(result)}
-    ${dateLensCard}
-    <section class="card wide reveal" style="--delay:0.05s">
-      <h3>${escape(dict.sectionGroups)}</h3>
-      ${renderGroupStage(result.groupTables)}
-    </section>
-    <section class="card wide reveal" style="--delay:0.15s">
-      <h3>${escape(dict.sectionBracket)}</h3>
-      ${whatIfBanner}
-      ${renderKnockout(result.knockout)}
-    </section>
-    <div class="grid">
-      <section class="card reveal" style="--delay:0.25s">
-        <h3>${escape(dict.sectionHidden)}</h3>
-        ${renderHidden(result.hidden)}
-      </section>
-      <section class="card reveal" style="--delay:0.35s">
-        <h3>${escape(dict.sectionNumerology)}</h3>
-        ${renderNumerology(result.numerology)}
-      </section>
-      <section class="card reveal" style="--delay:0.45s">
-        <h3>${escape(dict.sectionOmen)}</h3>
-        ${renderOmen(result.omen)}
-      </section>
-      <section class="card reveal" style="--delay:0.55s">
-        <h3>${escape(dict.sectionStats)}</h3>
-        ${renderPrior(result.prior, result.knockout.champion)}
-      </section>
-    </div>
-  `;
-
-  requestAnimationFrame(() => {
-    const fill = $(".verdict-fill");
-    if (fill) fill.style.width = `${result.confidence}%`;
-  });
-
-  // Confetti is the oracle's signature — skip it for what-if forks.
-  if (result.flips === 0) fireConfetti(result.confidence);
-  wireResultButtons(result);
-  wireKnockoutClicks();
-}
-
-function wireResultButtons(result) {
-  const copyBtn = $("#copy-btn");
-  const shareBtn = $("#share-btn");
-  const dict = t();
-  if (copyBtn) {
-    copyBtn.addEventListener("click", async () => {
-      try {
-        await navigator.clipboard.writeText(readingToText(result));
-        copyBtn.textContent = dict.copied;
-      } catch {
-        copyBtn.textContent = "…";
-      }
-      setTimeout(() => (copyBtn.textContent = dict.copyReading), 1500);
-    });
-  }
-  if (shareBtn) {
-    shareBtn.addEventListener("click", async () => {
-      const url = buildShareUrl();
-      history.replaceState(null, "", url);
-      try {
-        await navigator.clipboard.writeText(url);
-        shareBtn.textContent = dict.linkCopied;
-      } catch {
-        shareBtn.textContent = "…";
-      }
-      setTimeout(() => (shareBtn.textContent = dict.shareLink), 1500);
-    });
-  }
-  ["whatif-reset", "whatif-reset-inline"].forEach((id) => {
-    const btn = document.getElementById(id);
-    if (btn) btn.addEventListener("click", () => {
-      state.koOverrides = {};
-      run({ skipUrlUpdate: true, skipHistory: true });
-    });
-  });
-}
-
-function wireKnockoutClicks() {
-  $$(".ko-team[data-match-key]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const key = btn.dataset.matchKey;
-      const code = btn.dataset.teamCode;
-      if (!key || !code) return;
-      if (state.koOverrides[key] === code) {
-        // Clicking the already-overridden winner clears the override.
-        delete state.koOverrides[key];
-      } else {
-        // Find the natural winner; if user clicks that one, just clear instead.
-        const result = state.lastResult;
-        if (result) {
-          const match = result.knockout.rounds
-            .flatMap((r) => r.matches)
-            .find((m) => m.key === key);
-          if (match && !match.flipped && match.winner.code === code) {
-            delete state.koOverrides[key];
-          } else {
-            state.koOverrides[key] = code;
-          }
-        } else {
-          state.koOverrides[key] = code;
-        }
-      }
-      run({ skipUrlUpdate: true, skipHistory: true });
-    });
-  });
-}
-
-function run({ skipUrlUpdate, skipHistory } = {}) {
-  const text = $("#text-input").value;
-  const seed = $("#seed-input").value;
-  const date = $("#date-input").value;
-  const result = decode({
-    text, seed, date,
-    mode: state.mode,
-    locale: state.locale,
-    koOverrides: state.koOverrides,
-  });
-  state.lastResult = result;
-  render(result);
-  if (!skipUrlUpdate && !result.empty) {
-    history.replaceState(null, "", buildShareUrl());
-  }
-  // Only record canonical readings (no what-if forks).
-  if (!skipHistory && !result.empty && result.flips === 0) {
-    pushHistory(result);
-  }
-}
-
-/* ─────────── History (localStorage) ─────────── */
-
-function loadHistory() {
-  try {
-    const raw = localStorage.getItem(HISTORY_KEY);
-    if (!raw) return [];
-    const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveHistory() {
-  try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(state.history));
-  } catch {
-    // Storage may be unavailable (private mode, quota) — degrade silently.
-  }
-}
-
-function pushHistory(result) {
-  const entry = {
-    ts: Date.now(),
-    mode: result.mode,
-    seed: result.seed,
-    locale: state.locale,
-    champion: result.knockout.champion.name,
-    confederation: result.knockout.champion.confederation,
-    confidence: result.confidence,
-  };
-  // Dedupe: same mode + seed within last 10 minutes collapses.
-  const recent = state.history[0];
-  if (recent && recent.mode === entry.mode && recent.seed === entry.seed && entry.ts - recent.ts < 10 * 60_000) {
-    state.history[0] = entry;
-  } else {
-    state.history.unshift(entry);
-  }
-  state.history = state.history.slice(0, HISTORY_MAX);
-  saveHistory();
-  renderHistory();
-}
-
-function renderHistory() {
-  const dict = t();
-  const list = $("#history-list");
-  const empty = $("#history-empty");
-  if (!list || !empty) return;
-  if (!state.history.length) {
-    list.innerHTML = "";
-    empty.hidden = false;
-    return;
-  }
-  empty.hidden = true;
-  const now = Date.now();
-  list.innerHTML = state.history.map((h, i) => {
-    const ago = dict.historyRelative(Math.max(0, Math.floor((now - h.ts) / 1000)));
-    const modeLabel = h.mode === "text" ? dict.historyFromText : h.mode === "seed" ? dict.historyFromSeed : dict.historyFromDate;
-    const preview = escape(h.seed.length > 56 ? h.seed.slice(0, 56) + "…" : h.seed);
+    `;
+    const hitClass = r.championRank === 1 ? "hit-1" : r.championRank <= 3 ? "hit-3" : r.championRank <= 5 ? "hit-5" : "miss";
     return `
-      <div class="history-row" data-index="${i}">
-        <div class="history-main">
-          <div class="history-champ">${escape(teamName(h.champion))} <span class="muted">· ${h.confidence}%</span></div>
-          <div class="history-meta"><span class="history-pill">${escape(modeLabel)}</span> <span class="muted">${escape(ago)}</span></div>
-          <div class="history-seed muted">${preview}</div>
-        </div>
-        <div class="history-row-actions">
-          <button class="tool-btn" type="button" data-action="reopen" data-index="${i}">${escape(dict.historyReopen)}</button>
-          <button class="tool-btn" type="button" data-action="delete" data-index="${i}" aria-label="${escape(dict.historyDelete)}">✕</button>
-        </div>
+      <div class="bt-row ${hitClass}">
+        <span class="bt-year">${r.year}</span>
+        <span class="bt-host muted">${escape(r.host.join("/"))}</span>
+        <span class="bt-actual">→ ${escape(teamNameFromEnglish(r.actualChampion))}</span>
+        <span class="bt-top3">${r.modelTop3.map((m) => `<span class="bt-pick">${escape(teamNameFromCode(m.code))} ${pct(m.prob, 0)}</span>`).join("")}</span>
+        <span class="bt-rank">#${r.championRank ?? "?"}</span>
       </div>
     `;
   }).join("");
+  $("#backtest").innerHTML = rows;
+  $("#backtest-summary").innerHTML = dict.backtestSummary(
+    state.backtest.total,
+    state.backtest.top3Hits,
+    state.backtest.avgLogLoss?.toFixed(2) ?? "—",
+  );
 }
 
-function reopenHistory(i) {
-  const h = state.history[i];
-  if (!h) return;
-  state.koOverrides = {};
-  if (h.locale === "en" || h.locale === "de") setLocale(h.locale);
-  setMode(h.mode);
-  if (h.mode === "text") $("#text-input").value = h.seed;
-  else if (h.mode === "seed") $("#seed-input").value = h.seed;
-  else $("#date-input").value = h.seed;
-  closeHistory();
-  run({ skipHistory: true });
+function teamNameFromEnglish(name) {
+  return state.locale === "de" && NAMES_DE[name] ? NAMES_DE[name] : name;
 }
 
-function deleteHistory(i) {
-  state.history.splice(i, 1);
-  saveHistory();
-  renderHistory();
+function teamNameFromCode(code) {
+  // Backtest uses historical codes that may not match TEAMS_2026 lookup.
+  // Try direct first, fall back to known historical aliases.
+  if (teamByCode[code]) return teamName(code);
+  const HISTORICAL_ALIASES = {
+    PRK: "North Korea", SVK: "Slovakia", SVN: "Slovenia",
+    DNK: "Denmark", DEN: "Denmark", SWE: "Sweden",
+    UKR: "Ukraine", SRB: "Serbia", GRC: "Greece",
+    BIH: "Bosnia and Herzegovina", HND: "Honduras",
+    POL: "Poland", CHL: "Chile", CHI: "Chile",
+    URY: "Uruguay", CMR: "Cameroon", RUS: "Russia",
+    NGA: "Nigeria", CRC: "Costa Rica", BUL: "Bulgaria",
+    ITA: "Italy", AUS: "Australia", PER: "Peru",
+    WAL: "Wales", ISL: "Iceland",
+  };
+  const englishName = HISTORICAL_ALIASES[code] || code;
+  if (state.locale === "de" && NAMES_DE[englishName]) return NAMES_DE[englishName];
+  return englishName;
 }
 
-function openHistory() {
-  const drawer = $("#history-drawer");
-  const backdrop = $("#history-backdrop");
-  drawer.hidden = false;
-  backdrop.hidden = false;
-  drawer.setAttribute("aria-hidden", "false");
-  requestAnimationFrame(() => drawer.classList.add("open"));
+/* ─────────── Render: Context (historical stats) ─────────── */
+
+function renderContext() {
+  const dict = t();
+  const top = STATS.ranking[0];
+  $("#context").innerHTML = `
+    <ul>
+      <li>${dict.statsLeader(escape(teamNameFromEnglish(top.nation)), top.count)}</li>
+      <li>${dict.statsHost(STATS.hostWins, STATS.totalTournaments)}</li>
+      <li>${dict.statsContinental(STATS.europeWins, STATS.southAmericaWins)}</li>
+    </ul>
+  `;
 }
 
-function closeHistory() {
-  const drawer = $("#history-drawer");
-  const backdrop = $("#history-backdrop");
-  drawer.classList.remove("open");
-  drawer.setAttribute("aria-hidden", "true");
-  setTimeout(() => {
-    drawer.hidden = true;
-    backdrop.hidden = true;
-  }, 200);
+/* ─────────── Render: Methodology + sources ─────────── */
+
+function renderMethodology() {
+  const dict = t();
+  $("#methodology").innerHTML = escape(dict.methodologyBlurb);
+  $("#limitations").innerHTML = escape(dict.limitationsBody);
+  $("#sources").innerHTML = DATA_SOURCES.map((s) => `
+    <li><a href="${escape(s.url)}" target="_blank" rel="noopener">${escape(s.label)}</a>
+      <span class="muted">· ${escape(s.fetched)}</span></li>
+  `).join("");
 }
 
-/* ─────────── Confetti ─────────── */
+/* ─────────── Helpers ─────────── */
 
-function fireConfetti(confidence) {
-  if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+// Map historical English country names to their FIFA code.
+const NAME_TO_CODE = (() => {
+  const m = {};
+  for (const team of TEAMS_2026) m[team.name] = team.code;
+  // Add codes referenced in historical data but not in 2026 field.
+  const HISTORICAL = {
+    "Italy": "ITA", "Sweden": "SWE", "Denmark": "DEN", "Poland": "POL",
+    "Russia": "RUS", "Ukraine": "UKR", "Serbia": "SRB", "Greece": "GRC",
+    "Czech Republic": "CZE", "Slovakia": "SVK", "Slovenia": "SVN",
+    "Chile": "CHL", "Peru": "PER", "Honduras": "HND", "Costa Rica": "CRC",
+    "Wales": "WAL", "Iceland": "ISL", "Bosnia and Herzegovina": "BIH",
+    "Cameroon": "CMR", "Nigeria": "NGA",
+    "Uruguay": "URU", "Australia": "AUS", "Algeria": "ALG",
+  };
+  for (const [name, code] of Object.entries(HISTORICAL)) {
+    if (!m[name]) m[name] = code;
+  }
+  return m;
+})();
+
+function nameToCode(name) {
+  return NAME_TO_CODE[name] || name;
+}
+
+/* ─────────── Boot ─────────── */
+
+async function compute() {
+  // 2026 Monte-Carlo
+  state.mc = runMonteCarlo(TEAMS_2026, GROUPS_2026, hostCodes, ELO_2026, ITERATIONS, 2026);
+  // Backtest 2006-2022
+  state.backtest = runKnockoutBacktest(HISTORICAL_KNOCKOUTS, HISTORICAL_ELO, nameToCode, BACKTEST_ITERATIONS);
+}
+
+function renderAll() {
+  renderTop3();
+  renderDistribution();
+  renderMarket();
+  renderGroups();
+  renderBacktest();
+  renderContext();
+  renderMethodology();
+  fireConfetti();
+}
+
+function fireConfetti() {
+  if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
   const canvas = $("#confetti");
-  if (!canvas) return;
   const ctx = canvas.getContext("2d");
   const dpr = window.devicePixelRatio || 1;
   canvas.width = innerWidth * dpr;
@@ -539,38 +316,23 @@ function fireConfetti(confidence) {
   canvas.style.width = innerWidth + "px";
   canvas.style.height = innerHeight + "px";
   ctx.scale(dpr, dpr);
-
-  const count = Math.round(80 + confidence * 1.2);
   const colors = ["#00d97e", "#ffd166", "#ef476f", "#7fa896", "#ffffff"];
-  const parts = Array.from({ length: count }, () => ({
-    x: innerWidth / 2 + (Math.random() - 0.5) * 80,
-    y: 120 + Math.random() * 40,
-    vx: (Math.random() - 0.5) * 8,
-    vy: -Math.random() * 9 - 3,
-    g: 0.25 + Math.random() * 0.15,
-    size: 4 + Math.random() * 5,
-    rot: Math.random() * Math.PI,
-    vr: (Math.random() - 0.5) * 0.4,
+  const parts = Array.from({ length: 120 }, () => ({
+    x: innerWidth / 2 + (Math.random() - 0.5) * 80, y: 180,
+    vx: (Math.random() - 0.5) * 8, vy: -Math.random() * 9 - 3,
+    g: 0.25 + Math.random() * 0.15, size: 4 + Math.random() * 5,
+    rot: Math.random() * Math.PI, vr: (Math.random() - 0.5) * 0.4,
     color: colors[Math.floor(Math.random() * colors.length)],
-    life: 0,
-    max: 90 + Math.random() * 40,
+    life: 0, max: 90 + Math.random() * 40,
   }));
-
   let raf;
   function frame() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     let alive = 0;
     for (const p of parts) {
       if (p.life > p.max) continue;
-      alive++;
-      p.life++;
-      p.vy += p.g;
-      p.x += p.vx;
-      p.y += p.vy;
-      p.rot += p.vr;
-      ctx.save();
-      ctx.translate(p.x, p.y);
-      ctx.rotate(p.rot);
+      alive++; p.life++; p.vy += p.g; p.x += p.vx; p.y += p.vy; p.rot += p.vr;
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
       ctx.globalAlpha = Math.max(0, 1 - p.life / p.max);
       ctx.fillStyle = p.color;
       ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size * 0.4);
@@ -580,61 +342,30 @@ function fireConfetti(confidence) {
     else ctx.clearRect(0, 0, canvas.width, canvas.height);
   }
   frame();
-  return () => cancelAnimationFrame(raf);
 }
 
-/* ─────────── Boot ─────────── */
-
-document.addEventListener("DOMContentLoaded", () => {
-  $$(".mode-tab").forEach((tab) => tab.addEventListener("click", () => setMode(tab.dataset.mode)));
-  $$(".lang-btn").forEach((b) => b.addEventListener("click", () => setLocale(b.dataset.lang)));
-  $("#decode-btn").addEventListener("click", () => {
-    state.koOverrides = {};
-    run();
-  });
-
-  // Default date input to today so the "Date" tab is usable on first click.
-  const today = new Date();
-  const isoToday = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-  $("#date-input").value = isoToday;
-
-  document.addEventListener("keydown", (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-      state.koOverrides = {};
-      run();
-    }
-    if (e.key === "Escape") closeHistory();
-  });
-
-  // Changing input clears any pending what-if overrides — they belong to the previous reading.
-  ["text-input", "seed-input", "date-input"].forEach((id) => {
-    $(`#${id}`).addEventListener("input", () => { state.koOverrides = {}; });
-  });
-
-  // History drawer wiring
-  $("#history-btn").addEventListener("click", openHistory);
-  $("#history-close").addEventListener("click", closeHistory);
-  $("#history-backdrop").addEventListener("click", closeHistory);
-  $("#history-clear").addEventListener("click", () => {
-    if (!state.history.length) return;
-    if (confirm(t().historyClearConfirm)) {
-      state.history = [];
-      saveHistory();
-      renderHistory();
-    }
-  });
-  $("#history-list").addEventListener("click", (e) => {
-    const btn = e.target.closest("button[data-action]");
-    if (!btn) return;
-    const i = Number(btn.dataset.index);
-    if (btn.dataset.action === "reopen") reopenHistory(i);
-    else if (btn.dataset.action === "delete") deleteHistory(i);
-  });
-
-  setMode("text");
+document.addEventListener("DOMContentLoaded", async () => {
   applyI18n();
-  renderHistory();
-  if (applyUrlState()) {
-    run({ skipUrlUpdate: true });
-  }
+
+  $$(".lang-btn").forEach((b) => b.addEventListener("click", () => {
+    state.locale = b.dataset.lang;
+    document.documentElement.lang = state.locale;
+    $$(".lang-btn").forEach((el) => el.classList.toggle("active", el.dataset.lang === state.locale));
+    applyI18n();
+    if (state.mc) renderAll();
+  }));
+
+  $("#toggle-distribution").addEventListener("click", () => {
+    state.showAll = !state.showAll;
+    renderDistribution();
+  });
+
+  // Defer compute to next frame so the loading card paints first.
+  requestAnimationFrame(async () => {
+    await new Promise((r) => setTimeout(r, 16));
+    await compute();
+    $("#loading").hidden = true;
+    $("#dashboard").hidden = false;
+    renderAll();
+  });
 });
