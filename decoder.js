@@ -1,4 +1,4 @@
-import { TEAMS_2026, WINNERS_1930_2022, STATS, DEMONYMS } from "./data.js";
+import { TEAMS_2026, GROUPS_2026, WINNERS_1930_2022, STATS, DEMONYMS, I18N } from "./data.js";
 
 // FNV-1a 32-bit hash — deterministic, fast, no deps.
 export function hash32(str) {
@@ -32,7 +32,7 @@ export function seededShuffle(arr, seed) {
   return out;
 }
 
-// Scan input for team names hidden as substrings, plus an acrostic of word initials.
+// Scan input for team names hidden as substrings + demonyms + acrostic.
 export function findHiddenCountries(text, teams) {
   const lower = text.toLowerCase();
   const compact = lower.replace(/[^a-z]/g, "");
@@ -41,17 +41,11 @@ export function findHiddenCountries(text, teams) {
     const key = t.name.toLowerCase().replace(/[^a-z]/g, "");
     if (key.length >= 4 && compact.includes(key)) directHits.add(t.name);
   }
-  // Demonyms — "brazilian" → Brazil, "german" → Germany, etc.
   const words = lower.split(/[^a-z]+/).filter(Boolean);
   for (const w of words) {
     if (DEMONYMS[w]) directHits.add(DEMONYMS[w]);
   }
-  // Acrostic from first letters of each word
-  const initials = lower
-    .split(/[^a-z]+/)
-    .filter(Boolean)
-    .map((w) => w[0])
-    .join("");
+  const initials = words.map((w) => w[0]).join("");
   const acrostic = [];
   if (initials.length >= 3) {
     for (const t of teams) {
@@ -59,10 +53,7 @@ export function findHiddenCountries(text, teams) {
       if (key.length >= 4 && initials.includes(key)) acrostic.push(t.name);
     }
   }
-  return {
-    direct: [...directHits],
-    acrostic,
-  };
+  return { direct: [...directHits], acrostic };
 }
 
 // Letter-value numerology: a=1..z=26.
@@ -77,9 +68,7 @@ export function numerologyPick(text, teams) {
       letters += 1;
     }
   }
-  if (letters === 0) {
-    return { sum: 0, letters: 0, luckyDigit: 0, team: null };
-  }
+  if (letters === 0) return { sum: 0, letters: 0, luckyDigit: 0, team: null };
   const idx = sum % teams.length;
   let lucky = sum;
   while (lucky > 9) {
@@ -90,29 +79,112 @@ export function numerologyPick(text, teams) {
   return { sum, letters, luckyDigit: lucky, team: teams[idx] };
 }
 
-// Build a 16-team knockout bracket from a seed.
-export function bracketFromSeed(seed, teams) {
-  const shuffled = seededShuffle(teams, seed);
-  const sixteen = shuffled.slice(0, 16);
-  const rounds = [{ name: "Round of 16", matches: pair(sixteen) }];
+// Simulate one head-to-head: returns { winner, scoreA, scoreB }.
+// Goal counts come from tier-weighted Poisson-ish bins so scorelines feel real.
+function simulateMatch(a, b, matchSeed) {
+  const rng = mulberry32(matchSeed);
+  const goalsFor = (own, opp) => {
+    const r = rng();
+    // Stronger teams (lower tier) score more on average.
+    const lambda = Math.max(0.2, 1.6 - (own.tier - 1) * 0.35 + (opp.tier - 1) * 0.2);
+    // Coarse cumulative buckets for 0..5 goals.
+    let p = Math.exp(-lambda);
+    let cum = p;
+    let goals = 0;
+    for (let k = 1; k <= 5; k++) {
+      p = (p * lambda) / k;
+      cum += p;
+      if (r < cum) { goals = k; break; }
+      goals = k;
+    }
+    return goals;
+  };
+  const scoreA = goalsFor(a, b);
+  const scoreB = goalsFor(b, a);
+  return { scoreA, scoreB };
+}
 
-  let current = sixteen;
-  const roundNames = ["Quarter-finals", "Semi-finals", "Final"];
+// 3 points for a win, 1 each for a draw. Tie-break: GD, then GF, then seed-stable.
+export function simulateGroupStage(seed, groups, teamsByCode) {
+  const out = {};
+  for (const [letter, codes] of Object.entries(groups)) {
+    const teams = codes.map((c) => teamsByCode[c]);
+    const stats = Object.fromEntries(teams.map((t) => [t.code, { team: t, p: 0, gf: 0, ga: 0, gd: 0, w: 0, d: 0, l: 0 }]));
+    // 6 fixtures per group: pairings (0,1) (2,3) (0,2) (1,3) (0,3) (1,2)
+    const pairs = [[0, 1], [2, 3], [0, 2], [1, 3], [0, 3], [1, 2]];
+    for (let i = 0; i < pairs.length; i++) {
+      const [ai, bi] = pairs[i];
+      const a = teams[ai];
+      const b = teams[bi];
+      const ms = hash32(`${seed}|group|${letter}|${i}|${a.code}-${b.code}`);
+      const { scoreA, scoreB } = simulateMatch(a, b, ms);
+      stats[a.code].gf += scoreA; stats[a.code].ga += scoreB;
+      stats[b.code].gf += scoreB; stats[b.code].ga += scoreA;
+      if (scoreA > scoreB)      { stats[a.code].p += 3; stats[a.code].w += 1; stats[b.code].l += 1; }
+      else if (scoreB > scoreA) { stats[b.code].p += 3; stats[b.code].w += 1; stats[a.code].l += 1; }
+      else                       { stats[a.code].p += 1; stats[b.code].p += 1; stats[a.code].d += 1; stats[b.code].d += 1; }
+    }
+    const table = Object.values(stats).map((r) => ({ ...r, gd: r.gf - r.ga }));
+    // Stable sort: points → GD → GF → original group order.
+    const originalIdx = Object.fromEntries(codes.map((c, i) => [c, i]));
+    table.sort((x, y) =>
+      y.p - x.p ||
+      y.gd - x.gd ||
+      y.gf - x.gf ||
+      originalIdx[x.team.code] - originalIdx[y.team.code]
+    );
+    out[letter] = table;
+  }
+  return out;
+}
+
+// 24 group winners/runners-up + 8 best third-placed = 32 advance.
+export function pickQualifiers(groupTables) {
+  const winners = [];
+  const runnersUp = [];
+  const thirds = [];
+  for (const letter of Object.keys(groupTables)) {
+    const t = groupTables[letter];
+    winners.push({ ...t[0], group: letter, pos: 1 });
+    runnersUp.push({ ...t[1], group: letter, pos: 2 });
+    thirds.push({ ...t[2], group: letter, pos: 3 });
+  }
+  thirds.sort((a, b) => b.p - a.p || b.gd - a.gd || b.gf - a.gf || a.group.localeCompare(b.group));
+  const bestThirds = thirds.slice(0, 8);
+  return [...winners, ...runnersUp, ...bestThirds];
+}
+
+// Build a 32→1 knockout from the qualifier pool, ordered into a seeded bracket.
+export function buildKnockout(seed, qualifiers) {
+  // Seed-shuffle order so the bracket pairings differ per reading.
+  const ordered = seededShuffle(qualifiers, hash32(`${seed}|knockout-order`));
+  const roundNames = ["roundR32", "roundR16", "roundQF", "roundSF", "roundFinal"];
+  const rounds = [];
+  let current = ordered.slice(0, 32).map((q) => q.team);
   for (let r = 0; r < roundNames.length; r++) {
-    const winners = [];
     const pairs = pair(current);
+    const matches = [];
+    const winners = [];
     for (let m = 0; m < pairs.length; m++) {
       const [a, b] = pairs[m];
-      const matchSeed = hash32(`${seed}|${r}|${m}|${a.code}vs${b.code}`);
-      winners.push(pickWinner(a, b, matchSeed));
+      const ms = hash32(`${seed}|ko|${r}|${m}|${a.code}-${b.code}`);
+      const result = simulateMatch(a, b, ms);
+      let winner;
+      if (result.scoreA === result.scoreB) {
+        // Penalty shootout — coin flip biased by tier.
+        const rng = mulberry32(ms ^ 0xdeadbeef);
+        const strongA = a.tier <= b.tier;
+        winner = rng() < (strongA ? 0.6 : 0.4) ? a : b;
+      } else {
+        winner = result.scoreA > result.scoreB ? a : b;
+      }
+      matches.push({ a, b, scoreA: result.scoreA, scoreB: result.scoreB, winner });
+      winners.push(winner);
     }
-    rounds.push({ name: roundNames[r], matches: pair(winners) });
+    rounds.push({ name: roundNames[r], matches });
     current = winners;
   }
-  // After the Final round entry we still need to know the champion.
-  const finalSeed = hash32(`${seed}|champ|${current[0].code}vs${current[1].code}`);
-  const champion = pickWinner(current[0], current[1], finalSeed);
-  return { rounds, champion, finalists: current };
+  return { rounds, champion: current[0] };
 }
 
 function pair(list) {
@@ -121,44 +193,33 @@ function pair(list) {
   return out;
 }
 
-// Stronger tier wins ~65% of the time; same tier is 50/50.
-function pickWinner(a, b, matchSeed) {
-  const r = mulberry32(matchSeed)();
-  if (a.tier === b.tier) return r < 0.5 ? a : b;
-  const strong = a.tier < b.tier ? a : b;
-  const weak = strong === a ? b : a;
-  return r < 0.65 ? strong : weak;
-}
-
 // Pull an "omen" from the 22 past finals.
-export function historicalOmen(seed, champion) {
+export function historicalOmen(seed, champion, locale = "en") {
+  const t = I18N[locale];
   const matches = WINNERS_1930_2022.filter((f) => f.winner === champion.name);
-  let pick;
   if (matches.length > 0) {
-    pick = matches[hash32(`${seed}|omen|${champion.code}`) % matches.length];
+    const pick = matches[hash32(`${seed}|omen|${champion.code}`) % matches.length];
     return {
       type: "echo",
       year: pick.year,
       host: pick.host,
-      text: `${champion.name} last carried this glow in ${pick.year}, lifting the trophy in ${pick.host} with ${pick.topScorer} leading the scoring charts.`,
+      text: t.omenEcho(champion.name, pick.year, pick.host, pick.topScorer),
     };
   }
-  pick = WINNERS_1930_2022[hash32(`${seed}|omen-x|${champion.code}`) % WINNERS_1930_2022.length];
+  const pick = WINNERS_1930_2022[hash32(`${seed}|omen-x|${champion.code}`) % WINNERS_1930_2022.length];
   return {
     type: "parallel",
     year: pick.year,
     host: pick.host,
-    text: `No ${champion.name} title in 96 years of finals — but the seed echoes ${pick.year}, when ${pick.winner} broke through in ${pick.host}.`,
+    text: t.omenParallel(champion.name, pick.year, pick.host, pick.winner),
   };
 }
 
-// Pull a couple of headline stats from the historical aggregate.
 export function statisticalPrior(champion) {
   const top = STATS.ranking[0];
-  const championTitles = STATS.titles[champion.name] || 0;
   return {
     leader: top,
-    championTitles,
+    championTitles: STATS.titles[champion.name] || 0,
     hostWins: STATS.hostWins,
     totalTournaments: STATS.totalTournaments,
     europeWins: STATS.europeWins,
@@ -166,23 +227,26 @@ export function statisticalPrior(champion) {
   };
 }
 
-// Orchestrator — returns one result object the UI renders.
-export function decode({ text = "", seed = "", mode = "text" }) {
+// Orchestrator.
+export function decode({ text = "", seed = "", mode = "text", locale = "en" }) {
   const effective = (mode === "text" ? text : seed).trim();
-  if (!effective) {
-    return { empty: true };
-  }
+  if (!effective) return { empty: true };
+
   const hidden = findHiddenCountries(effective, TEAMS_2026);
   const numerology = numerologyPick(effective, TEAMS_2026);
-  const bracket = bracketFromSeed(hash32(effective), TEAMS_2026);
-  const omen = historicalOmen(effective, bracket.champion);
-  const prior = statisticalPrior(bracket.champion);
 
-  // Confidence: bracket result is the spine. Add bumps for corroboration.
+  const teamsByCode = Object.fromEntries(TEAMS_2026.map((t) => [t.code, t]));
+  const groupTables = simulateGroupStage(hash32(effective), GROUPS_2026, teamsByCode);
+  const qualifiers = pickQualifiers(groupTables);
+  const knockout = buildKnockout(hash32(effective), qualifiers);
+
+  const omen = historicalOmen(effective, knockout.champion, locale);
+  const prior = statisticalPrior(knockout.champion);
+
   let confidence = 55;
-  if (numerology.team && numerology.team.name === bracket.champion.name) confidence += 15;
-  if (hidden.direct.includes(bracket.champion.name)) confidence += 15;
-  if (hidden.acrostic.includes(bracket.champion.name)) confidence += 5;
+  if (numerology.team && numerology.team.name === knockout.champion.name) confidence += 15;
+  if (hidden.direct.includes(knockout.champion.name)) confidence += 15;
+  if (hidden.acrostic.includes(knockout.champion.name)) confidence += 5;
   confidence += Math.min(prior.championTitles * 2, 10);
   confidence = Math.min(confidence, 99);
 
@@ -191,7 +255,8 @@ export function decode({ text = "", seed = "", mode = "text" }) {
     seed: effective,
     hidden,
     numerology,
-    bracket,
+    groupTables,
+    knockout,
     omen,
     prior,
     confidence,

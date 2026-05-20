@@ -7,37 +7,43 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+  <canvas id="confetti" aria-hidden="true"></canvas>
+
   <div class="container">
     <header class="hero">
-      <h1>World Cup Oracle 2026</h1>
-      <p>Paste a sentence or seed a name — the oracle reads hidden predictions for the 48-team field.</p>
+      <div class="lang-switch" role="group" aria-label="Language">
+        <button class="lang-btn active" data-lang="en" type="button">EN</button>
+        <button class="lang-btn" data-lang="de" type="button">DE</button>
+      </div>
+      <h1 data-i18n="title">World Cup Oracle 2026</h1>
+      <p data-i18n="subtitle">Paste a sentence or seed a name — the oracle reads hidden predictions for the 48-team field.</p>
     </header>
 
     <div class="input-shell">
       <div class="mode-tabs" role="tablist">
-        <button class="mode-tab active" data-mode="text" type="button">Scan Text</button>
-        <button class="mode-tab" data-mode="seed" type="button">Personal Seed</button>
+        <button class="mode-tab active" data-mode="text" data-i18n="tabText" type="button">Scan Text</button>
+        <button class="mode-tab" data-mode="seed" data-i18n="tabSeed" type="button">Personal Seed</button>
       </div>
 
       <div id="text-panel">
-        <label class="field-label" for="text-input">Paste any text — tweet, headline, message</label>
-        <textarea id="text-input" placeholder="Brazilian samba meets Argentine tango on a German autobahn..."></textarea>
+        <label class="field-label" for="text-input" data-i18n="textLabel">Paste any text — tweet, headline, message</label>
+        <textarea id="text-input" data-i18n-attr="placeholder:textPlaceholder"></textarea>
       </div>
 
       <div id="seed-panel" hidden>
-        <label class="field-label" for="seed-input">Enter a seed — name + birthday, lucky phrase, anything</label>
-        <input id="seed-input" type="text" placeholder="Lionel 24-06-1987" />
+        <label class="field-label" for="seed-input" data-i18n="seedLabel">Enter a seed — name + birthday, lucky phrase, anything</label>
+        <input id="seed-input" type="text" data-i18n-attr="placeholder:seedPlaceholder" />
       </div>
 
       <div class="actions">
-        <span class="hint">Tip: ⌘/Ctrl + Enter to decode</span>
-        <button id="decode-btn" class="decode-btn" type="button">Decode</button>
+        <span class="hint" data-i18n="shortcutHint">Tip: ⌘/Ctrl + Enter to decode</span>
+        <button id="decode-btn" class="decode-btn" data-i18n="decode" type="button">Decode</button>
       </div>
     </div>
 
-    <div id="output"></div>
+    <div id="output" aria-live="polite"></div>
 
-    <footer class="foot">
+    <footer class="foot" data-i18n="foot">
       Deterministic readings · 96 years of finals baked in · for amusement, not for betting.
     </footer>
   </div>
