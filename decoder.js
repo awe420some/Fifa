@@ -1,4 +1,16 @@
-import { TEAMS_2026, GROUPS_2026, WINNERS_1930_2022, STATS, DEMONYMS, I18N } from "./data.js";
+import { TEAMS_2026, GROUPS_2026, WINNERS_1930_2022, STATS, DEMONYMS, I18N, NAMES_DE } from "./data.js";
+
+// Per-tier scoring strength. Higher = expected to score more, harder to score against.
+// Tuned so T1 vs T4 averages ~3-0 (T1 wins ~92%), T2 vs T3 averages ~1.5-0.7.
+const TIER_STRENGTH = { 1: 2.4, 2: 1.7, 3: 1.1, 4: 0.6 };
+
+const localName = (name, locale) => (locale === "de" && NAMES_DE[name]) || name;
+
+const localHost = (host, locale) => {
+  if (locale !== "de") return host;
+  // "South Korea/Japan" (2002) — translate each side.
+  return host.split("/").map((s) => NAMES_DE[s.trim()] || s.trim()).join("/");
+};
 
 // FNV-1a 32-bit hash — deterministic, fast, no deps.
 export function hash32(str) {
@@ -79,29 +91,32 @@ export function numerologyPick(text, teams) {
   return { sum, letters, luckyDigit: lucky, team: teams[idx] };
 }
 
-// Simulate one head-to-head: returns { winner, scoreA, scoreB }.
-// Goal counts come from tier-weighted Poisson-ish bins so scorelines feel real.
+// Simulate one head-to-head: returns { scoreA, scoreB }.
+// Each side's expected goals comes from its tier strength minus the opponent's,
+// then we sample from a Poisson cumulative — including the 0-bucket, so shutouts
+// are possible (a previous version skipped k=0 and inflated weak-team scores).
 function simulateMatch(a, b, matchSeed) {
   const rng = mulberry32(matchSeed);
-  const goalsFor = (own, opp) => {
-    const r = rng();
-    // Stronger teams (lower tier) score more on average.
-    const lambda = Math.max(0.2, 1.6 - (own.tier - 1) * 0.35 + (opp.tier - 1) * 0.2);
-    // Coarse cumulative buckets for 0..5 goals.
-    let p = Math.exp(-lambda);
-    let cum = p;
-    let goals = 0;
-    for (let k = 1; k <= 5; k++) {
-      p = (p * lambda) / k;
-      cum += p;
-      if (r < cum) { goals = k; break; }
-      goals = k;
-    }
-    return goals;
+  const expectedGoals = (own, opp) => {
+    const ownStrength = TIER_STRENGTH[own.tier] ?? 1.0;
+    const oppStrength = TIER_STRENGTH[opp.tier] ?? 1.0;
+    return Math.max(0.15, ownStrength - 0.55 * oppStrength + 0.55);
   };
-  const scoreA = goalsFor(a, b);
-  const scoreB = goalsFor(b, a);
-  return { scoreA, scoreB };
+  const goalsFor = (lambda) => {
+    const r = rng();
+    let cum = 0;
+    let p = Math.exp(-lambda);
+    for (let k = 0; k <= 6; k++) {
+      cum += p;
+      if (r < cum) return k;
+      p = (p * lambda) / (k + 1);
+    }
+    return 6;
+  };
+  return {
+    scoreA: goalsFor(expectedGoals(a, b)),
+    scoreB: goalsFor(expectedGoals(b, a)),
+  };
 }
 
 // 3 points for a win, 1 each for a draw. Tie-break: GD, then GF, then seed-stable.
@@ -154,15 +169,42 @@ export function pickQualifiers(groupTables) {
   return [...winners, ...runnersUp, ...bestThirds];
 }
 
+// Canonical bracket seed positions for a size-N single-elimination tournament:
+// the classical 1v32, 16v17, 8v25, 9v24, ... arrangement built by halving recursion.
+// Returns 1-indexed seed positions; index in returned array = bracket slot.
+function bracketOrder(n) {
+  let order = [1, 2];
+  while (order.length < n) {
+    const size = order.length;
+    const next = new Array(size * 2);
+    for (let i = 0; i < size; i++) {
+      next[i * 2] = order[i];
+      next[i * 2 + 1] = size * 2 + 1 - order[i];
+    }
+    order = next;
+  }
+  return order;
+}
+
 // Build a 32→1 knockout from the qualifier pool, ordered into a seeded bracket.
+// Qualifiers are ranked by group position (winner → runner-up → third), then
+// points / GD / GF / tier, then mapped onto a classical 32-slot bracket so the
+// top-seeded teams meet weaker opponents in R32 and only collide later.
 // `overrides` is a map of "r-m" → team-code that forces that match's winner.
 // Downstream rounds re-simulate with the new pairings (different match seeds),
 // so a flip rewrites the whole bracket from that point onward.
 export function buildKnockout(seed, qualifiers, overrides = {}) {
-  const ordered = seededShuffle(qualifiers, hash32(`${seed}|knockout-order`));
+  const seeded = qualifiers.slice().sort((x, y) =>
+    x.pos - y.pos ||
+    y.p - x.p ||
+    y.gd - x.gd ||
+    y.gf - x.gf ||
+    x.team.tier - y.team.tier
+  );
+  const slots = bracketOrder(32).map((rank) => seeded[rank - 1]);
   const roundNames = ["roundR32", "roundR16", "roundQF", "roundSF", "roundFinal"];
   const rounds = [];
-  let current = ordered.slice(0, 32).map((q) => q.team);
+  let current = slots.map((q) => q.team);
   for (let r = 0; r < roundNames.length; r++) {
     const pairs = pair(current);
     const matches = [];
@@ -206,9 +248,11 @@ function pair(list) {
   return out;
 }
 
-// Pull an "omen" from the 22 past finals.
+// Pull an "omen" from the 22 past finals. Country names get localized so the
+// DE locale doesn't leak "Brazil" / "Mexico" through the formatted string.
 export function historicalOmen(seed, champion, locale = "en") {
   const t = I18N[locale];
+  const champLocal = localName(champion.name, locale);
   const matches = WINNERS_1930_2022.filter((f) => f.winner === champion.name);
   if (matches.length > 0) {
     const pick = matches[hash32(`${seed}|omen|${champion.code}`) % matches.length];
@@ -216,7 +260,7 @@ export function historicalOmen(seed, champion, locale = "en") {
       type: "echo",
       year: pick.year,
       host: pick.host,
-      text: t.omenEcho(champion.name, pick.year, pick.host, pick.topScorer),
+      text: t.omenEcho(champLocal, pick.year, localHost(pick.host, locale), pick.topScorer),
     };
   }
   const pick = WINNERS_1930_2022[hash32(`${seed}|omen-x|${champion.code}`) % WINNERS_1930_2022.length];
@@ -224,7 +268,7 @@ export function historicalOmen(seed, champion, locale = "en") {
     type: "parallel",
     year: pick.year,
     host: pick.host,
-    text: t.omenParallel(champion.name, pick.year, pick.host, pick.winner),
+    text: t.omenParallel(champLocal, pick.year, localHost(pick.host, locale), localName(pick.winner, locale)),
   };
 }
 
