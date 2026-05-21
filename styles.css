@@ -323,6 +323,31 @@ footer.foot {
 
 .small { font-size: 0.75rem; }
 
+/* Stage-by-stage table */
+.stages-table {
+  width: 100%; border-collapse: collapse;
+  font-size: 0.82rem; overflow-x: auto;
+}
+.stages-table th {
+  text-align: right; padding: 6px 6px;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.68rem; letter-spacing: 0.5px;
+  color: var(--muted); text-transform: uppercase;
+  position: sticky; top: 0; background: var(--bg-1);
+}
+.stages-table th:first-child, .stages-table td:first-child { text-align: left; }
+.stages-table td {
+  padding: 5px 6px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  font-variant-numeric: tabular-nums;
+}
+.stages-table td.num { text-align: right; }
+.stages-table td.accent { color: var(--accent-2); font-weight: 600; }
+.stages-table td.small { color: var(--muted); }
+@media (max-width: 720px) {
+  .stages-table { font-size: 0.72rem; display: block; overflow-x: auto; }
+}
+
 .reveal {
   opacity: 0; animation: reveal 0.55s ease forwards;
   animation-delay: var(--delay, 0.1s);

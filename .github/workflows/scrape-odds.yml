@@ -1,0 +1,47 @@
+name: Scrape bookmaker odds
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"   # every Monday 06:00 UTC
+  workflow_dispatch:        # also runnable manually from the Actions tab
+
+permissions:
+  contents: write
+
+concurrency:
+  group: scrape-odds
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+
+      - name: Install Playwright + Chromium
+        run: |
+          npm init -y > /dev/null
+          npm install playwright@1.56.1 --no-save --silent
+          npx playwright install chromium --with-deps
+
+      - name: Run scraper
+        id: scrape
+        run: node scripts/scrape-bookmakers.mjs
+        continue-on-error: true
+
+      - name: Commit snapshot if changed
+        if: steps.scrape.outcome == 'success'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet data/market-snapshot.json; then
+            git add data/market-snapshot.json
+            git commit -m "Refresh bookmaker odds snapshot ($(date -u +%Y-%m-%d))"
+            git push
+          else
+            echo "Snapshot unchanged; nothing to commit."
+          fi

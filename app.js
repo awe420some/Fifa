@@ -15,6 +15,20 @@ import { squadEloAdjustments } from "./models/squad.js";
 import { DEFAULT_WEIGHTS } from "./models/ensemble.js";
 import { aggregateMarket, deVig } from "./models/market.js";
 
+// Try to load a refreshed market snapshot committed by the scrape-odds
+// GitHub Action. Falls back to the inline MARKET_ODDS_2026 if absent.
+async function loadMarketSnapshot() {
+  try {
+    const resp = await fetch("./data/market-snapshot.json", { cache: "no-store" });
+    if (!resp.ok) return null;
+    const snap = await resp.json();
+    if (!snap?.aggregated || Object.keys(snap.aggregated).length === 0) return null;
+    return snap;
+  } catch {
+    return null;
+  }
+}
+
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => [...document.querySelectorAll(sel)];
 
@@ -92,7 +106,7 @@ function renderTop3() {
 
 function renderModelBreakdown() {
   const ranked = rankedTitles().slice(0, 5);
-  const market = MARKET_ODDS_2026;
+  const market = state.marketProbs || MARKET_ODDS_2026;
   const elo = state.mc.titleProbability;
   $("#model-breakdown").innerHTML = `
     <table class="breakdown-table">
@@ -114,6 +128,65 @@ function renderModelBreakdown() {
           </tr>
         `).join("")}
       </tbody>
+    </table>
+  `;
+}
+
+/* ─────────── Stage-by-stage table ─────────── */
+
+function renderStages() {
+  const dict = t();
+  const cols = dict.stageCols;
+  const market = state.marketProbs || MARKET_ODDS_2026;
+  const teams = TEAMS_2026.map((team) => {
+    const code = team.code;
+    const tp = (state.blendedTitle || state.mc.titleProbability)[code] || 0;
+    const se = Math.sqrt(Math.max(0, tp * (1 - tp)) / state.mc.iterations);
+    const ciLow = Math.max(0, tp - 1.96 * se);
+    const ciHigh = Math.min(1, tp + 1.96 * se);
+    const surprise = tp > 0 ? -Math.log2(tp) : Infinity;
+    return {
+      code, tp,
+      market: market[code] || 0,
+      r32: state.mc.r32Probability[code] || 0,
+      r16: state.mc.r16Probability[code] || 0,
+      qf: state.mc.quartersProbability[code] || 0,
+      sf: state.mc.semisProbability[code] || 0,
+      finalP: state.mc.finalsProbability[code] || 0,
+      surprise, ciLow, ciHigh,
+    };
+  })
+    .sort((a, b) => b.tp - a.tp)
+    .slice(0, 12);
+  const rows = teams.map((r) => `
+    <tr>
+      <td>${escape(teamName(r.code))}</td>
+      <td class="num">${pct(r.market, 1)}</td>
+      <td class="num">${pct(r.r32, 0)}</td>
+      <td class="num">${pct(r.r16, 0)}</td>
+      <td class="num">${pct(r.qf, 0)}</td>
+      <td class="num">${pct(r.sf, 0)}</td>
+      <td class="num">${pct(r.finalP, 1)}</td>
+      <td class="num accent">${pct(r.tp, 2)}</td>
+      <td class="num small">[${pct(r.ciLow, 1)}, ${pct(r.ciHigh, 1)}]</td>
+      <td class="num">${r.surprise === Infinity ? "—" : r.surprise.toFixed(1)}</td>
+    </tr>
+  `).join("");
+  $("#stages").innerHTML = `
+    <table class="stages-table">
+      <thead><tr>
+        <th>${escape(cols.team)}</th>
+        <th>${escape(cols.market)}</th>
+        <th>${escape(cols.r32)}</th>
+        <th>${escape(cols.r16)}</th>
+        <th>${escape(cols.qf)}</th>
+        <th>${escape(cols.sf)}</th>
+        <th>${escape(cols.final)}</th>
+        <th>${escape(cols.title)}</th>
+        <th>${escape(cols.ci)}</th>
+        <th>${escape(cols.surprise)}</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
     </table>
   `;
 }
@@ -149,7 +222,7 @@ function renderMarket() {
   const teams = TEAMS_2026.map((team) => ({
     code: team.code,
     model: (state.blendedTitle || state.mc.titleProbability)[team.code] || 0,
-    market: MARKET_ODDS_2026[team.code] || 0,
+    market: (state.marketProbs || MARKET_ODDS_2026)[team.code] || 0,
   }));
   const top = teams.sort((a, b) => Math.max(b.model, b.market) - Math.max(a.model, a.market)).slice(0, 15);
   const maxV = Math.max(...top.flatMap((x) => [x.model, x.market]));
@@ -363,7 +436,7 @@ function recompute() {
     ITERATIONS,
   );
   if (state.options.useMarket) {
-    state.blendedTitle = blendWithMarket(state.mc.titleProbability, MARKET_ODDS_2026, DEFAULT_WEIGHTS.market);
+    state.blendedTitle = blendWithMarket(state.mc.titleProbability, state.marketProbs || MARKET_ODDS_2026, DEFAULT_WEIGHTS.market);
   } else {
     state.blendedTitle = state.mc.titleProbability;
   }
@@ -411,6 +484,13 @@ function buildCombinedTournaments() {
 
 async function bootstrap() {
   const combined = buildCombinedTournaments();
+  // Try to refresh market odds from the scraped snapshot.
+  state.marketSnapshot = await loadMarketSnapshot();
+  if (state.marketSnapshot?.aggregated) {
+    state.marketProbs = state.marketSnapshot.aggregated;
+  } else {
+    state.marketProbs = MARKET_ODDS_2026;
+  }
   // 1. Fit DC on ALL historical matches (group + KO across all years).
   state.dcParams = fitDCOnHistorical(HISTORICAL_KNOCKOUTS, HISTORICAL_ELO, NEW_HISTORICAL_MATCHES);
   // 2. Squad-strength deltas.
@@ -426,6 +506,7 @@ function renderAll() {
   renderTop3();
   renderModelBreakdown();
   renderDistribution();
+  renderStages();
   renderMarket();
   renderGroups();
   renderBacktest();

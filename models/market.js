@@ -30,9 +30,13 @@ export function deVig(probs) {
   return out;
 }
 
-// Aggregate de-vigged distributions across N sources. Median per team,
-// then renormalize. Trimmed mean is more robust but median works fine
-// for our handful of sources.
+// Aggregate de-vigged distributions across N sources using the logit-
+// mean approach recommended by the WM-forecasting literature
+// (Henery 1999; Constantinou & Fenton 2013). Extreme values get less
+// pull than under an arithmetic mean — important when one source has
+// a sharper consensus and another is more diffuse.
+const _logit = (p) => Math.log(p / (1 - p));
+const _expit = (x) => 1 / (1 + Math.exp(-x));
 export function aggregateMarket(sources) {
   if (sources.length === 0) return {};
   const allTeams = new Set();
@@ -41,10 +45,12 @@ export function aggregateMarket(sources) {
   for (const team of allTeams) {
     const vals = sources
       .map((s) => s.probs[team])
-      .filter((v) => v !== undefined && v !== null && !Number.isNaN(v));
+      .filter((v) => v !== undefined && v !== null && !Number.isNaN(v) && v > 0 && v < 1);
     if (vals.length === 0) { out[team] = 0; continue; }
-    vals.sort((a, b) => a - b);
-    out[team] = vals[Math.floor(vals.length / 2)];
+    const m = vals
+      .map((p) => _logit(Math.max(1e-6, Math.min(1 - 1e-6, p))))
+      .reduce((a, b) => a + b, 0) / vals.length;
+    out[team] = _expit(m);
   }
   // Renormalize so probabilities sum to 1.
   const total = Object.values(out).reduce((s, v) => s + v, 0);

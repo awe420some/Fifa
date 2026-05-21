@@ -221,11 +221,15 @@ function simulateTournament(teams, groups, ctx, rng) {
   const finalMatch = lastRound?.matches?.[0];
   const semis = rounds[rounds.length - 2]?.matches?.flatMap((m) => [m.a, m.b]) || [];
   const quarters = rounds[rounds.length - 3]?.matches?.flatMap((m) => [m.a, m.b]) || semis.slice();
+  // R16 = teams entering the round of 16 (= R32 winners for 48-team WM,
+  // or the initial 16 for a 32-team WM).
+  const r16 = rounds[rounds.length - 4]?.matches?.flatMap((m) => [m.a, m.b]) || quarters.slice();
   return {
     groupTables, qualifiers, rounds, champion,
     finalists: finalMatch ? [finalMatch.a, finalMatch.b] : [],
     semifinalists: semis,
     quarterfinalists: quarters,
+    r16Teams: r16,
   };
 }
 
@@ -252,7 +256,8 @@ export function runEnsembleMonteCarlo(teams, groups, hostCodes, eloMap, options 
   const blank = () => Object.fromEntries(teams.map((t) => [t.code, 0]));
   const counts = {
     title: blank(), finals: blank(), semis: blank(),
-    quarters: blank(), groupAdvance: blank(),
+    quarters: blank(), r16: blank(), reachR32: blank(),
+    groupAdvance: blank(),
   };
   const groupPos = Object.fromEntries(teams.map((t) => [t.code, { p1: 0, p2: 0, p3: 0, p4: 0, total: 0 }]));
   let sampleRun = null;
@@ -265,6 +270,9 @@ export function runEnsembleMonteCarlo(teams, groups, hostCodes, eloMap, options 
     for (const t of r.finalists) counts.finals[t.code] = (counts.finals[t.code] || 0) + 1;
     for (const t of r.semifinalists) counts.semis[t.code] = (counts.semis[t.code] || 0) + 1;
     for (const t of r.quarterfinalists) counts.quarters[t.code] = (counts.quarters[t.code] || 0) + 1;
+    // P(reach R32) for the 48-team format — group top-2 OR best-third.
+    for (const q of r.qualifiers || []) counts.reachR32[q.team.code] = (counts.reachR32[q.team.code] || 0) + 1;
+    for (const t of r.r16Teams || []) counts.r16[t.code] = (counts.r16[t.code] || 0) + 1;
     for (const [, table] of Object.entries(r.groupTables)) {
       for (let pos = 0; pos < table.length; pos++) {
         const code = table[pos].team.code;
@@ -286,6 +294,8 @@ export function runEnsembleMonteCarlo(teams, groups, hostCodes, eloMap, options 
     finalsProbability: toProbs(counts.finals),
     semisProbability: toProbs(counts.semis),
     quartersProbability: toProbs(counts.quarters),
+    r16Probability: toProbs(counts.r16),
+    r32Probability: toProbs(counts.reachR32),
     groupAdvanceProbability: toProbs(counts.groupAdvance),
     groupPositionDistribution: groupPos,
     sampleRun,
