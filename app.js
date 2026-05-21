@@ -1,23 +1,40 @@
-// UI orchestrator for the data-driven 2026 forecast.
+// UI orchestrator for the ensemble forecast.
 import {
   TEAMS_2026, GROUPS_2026, ELO_2026, ELO_2026_META,
   MARKET_ODDS_2026, MARKET_ODDS_2026_META,
-  HISTORICAL_KNOCKOUTS, HISTORICAL_ELO, HISTORICAL_ELO_META,
-  WINNERS_1930_2022, STATS, NAMES_DE, I18N, DATA_SOURCES,
+  HISTORICAL_KNOCKOUTS, HISTORICAL_ELO,
+  SQUAD_INDEX_2026, NEW_HISTORICAL_MATCHES,
+  STATS, NAMES_DE, I18N, DATA_SOURCES,
 } from "./data.js";
-import { runMonteCarlo, runKnockoutBacktest } from "./predictor.js";
+import {
+  runEnsembleMonteCarlo, matchProbs,
+  fitDCOnHistorical, runRPSBacktest, calibrationBins,
+  blendWithMarket,
+} from "./predictor.js";
+import { squadEloAdjustments } from "./models/squad.js";
+import { DEFAULT_WEIGHTS } from "./models/ensemble.js";
+import { aggregateMarket, deVig } from "./models/market.js";
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => [...document.querySelectorAll(sel)];
 
 const ITERATIONS = 10000;
-const BACKTEST_ITERATIONS = 2000;
 
 const state = {
   locale: "en",
-  mc: null,            // 2026 Monte-Carlo result
-  backtest: null,      // backtest result
+  mc: null,
+  backtest: null,
+  calibration: null,
+  dcParams: null,
+  squadDelta: null,
+  blendedTitle: null,
   showAll: false,
+  options: {
+    useHost: true,
+    useSquad: true,
+    useDC: true,
+    useMarket: true,
+  },
 };
 
 const t = () => I18N[state.locale];
@@ -25,20 +42,14 @@ const teamByCode = Object.fromEntries(TEAMS_2026.map((x) => [x.code, x]));
 const hostCodes = TEAMS_2026.filter((x) => x.host).map((x) => x.code);
 
 const teamName = (code) => {
-  const t = teamByCode[code];
-  if (!t) return code;
-  return state.locale === "de" && NAMES_DE[t.name] ? NAMES_DE[t.name] : t.name;
+  const team = teamByCode[code];
+  if (!team) return code;
+  return state.locale === "de" && NAMES_DE[team.name] ? NAMES_DE[team.name] : team.name;
 };
 
-function escape(str) {
-  return String(str).replace(/[&<>"']/g, (c) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-  })[c]);
-}
-
-function pct(p, digits = 1) {
-  return `${(p * 100).toFixed(digits)}%`;
-}
+const escape = (str) => String(str).replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const pct = (p, d = 1) => `${(p * 100).toFixed(d)}%`;
 
 function applyI18n() {
   const dict = t();
@@ -51,21 +62,24 @@ function applyI18n() {
   $("#footer-line").textContent = dict.footer;
 }
 
-/* ─────────── Render: Top 3 ─────────── */
+/* ─────────── Top 3 ─────────── */
 
-function renderTop3() {
-  const dict = t();
-  const ranked = Object.entries(state.mc.titleProbability)
+function rankedTitles() {
+  const probs = state.blendedTitle || state.mc.titleProbability;
+  return Object.entries(probs)
     .map(([code, p]) => ({ code, p }))
     .sort((a, b) => b.p - a.p);
-  const top3 = ranked.slice(0, 3);
-  $("#top3").innerHTML = top3.map((row, i) => `
+}
+
+function renderTop3() {
+  const ranked = rankedTitles().slice(0, 3);
+  $("#top3").innerHTML = ranked.map((row, i) => `
     <div class="top-card top-rank-${i + 1}">
       <div class="top-rank">${i + 1}</div>
       <div class="top-team">${escape(teamName(row.code))}</div>
       <div class="top-meta">${escape(teamByCode[row.code]?.confederation || "")}</div>
       <div class="top-prob">${pct(row.p, 1)}</div>
-      <div class="top-bar"><div class="top-bar-fill" style="width:${Math.min(100, row.p * 300)}%"></div></div>
+      <div class="top-bar"><div class="top-bar-fill" style="width:${Math.min(100, row.p * 350)}%"></div></div>
       <div class="top-sub">
         <span>SF ${pct(state.mc.semisProbability[row.code] || 0, 0)}</span>
         <span>QF ${pct(state.mc.quartersProbability[row.code] || 0, 0)}</span>
@@ -74,11 +88,41 @@ function renderTop3() {
   `).join("");
 }
 
-/* ─────────── Render: Full distribution ─────────── */
+/* ─────────── Model breakdown ─────────── */
+
+function renderModelBreakdown() {
+  const ranked = rankedTitles().slice(0, 5);
+  const market = MARKET_ODDS_2026;
+  const elo = state.mc.titleProbability;
+  $("#model-breakdown").innerHTML = `
+    <table class="breakdown-table">
+      <thead>
+        <tr>
+          <th>Team</th>
+          <th>Ensemble</th>
+          <th>Elo+DC MC</th>
+          <th>Markt</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${ranked.map((row) => `
+          <tr>
+            <td>${escape(teamName(row.code))}</td>
+            <td class="num accent">${pct(row.p, 1)}</td>
+            <td class="num">${pct(elo[row.code] || 0, 1)}</td>
+            <td class="num">${pct(market[row.code] || 0, 1)}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+/* ─────────── Full distribution ─────────── */
 
 function renderDistribution() {
   const dict = t();
-  const ranked = Object.entries(state.mc.titleProbability)
+  const ranked = Object.entries(state.blendedTitle || state.mc.titleProbability)
     .map(([code, p]) => ({
       code, p,
       semi: state.mc.semisProbability[code] || 0,
@@ -95,20 +139,18 @@ function renderDistribution() {
       <div class="dist-extra muted">SF ${pct(r.semi, 0)} · Adv ${pct(r.advance, 0)}</div>
     </div>
   `).join("");
-  const btn = $("#toggle-distribution");
-  btn.textContent = state.showAll ? dict.hideAll : dict.showAll;
+  $("#toggle-distribution").textContent = state.showAll ? dict.hideAll : dict.showAll;
 }
 
-/* ─────────── Render: Model vs Market ─────────── */
+/* ─────────── Market panel ─────────── */
 
 function renderMarket() {
   const dict = t();
   const teams = TEAMS_2026.map((team) => ({
     code: team.code,
-    model: state.mc.titleProbability[team.code] || 0,
+    model: (state.blendedTitle || state.mc.titleProbability)[team.code] || 0,
     market: MARKET_ODDS_2026[team.code] || 0,
   }));
-  // Top 15 by max(model, market)
   const top = teams.sort((a, b) => Math.max(b.model, b.market) - Math.max(a.model, a.market)).slice(0, 15);
   const maxV = Math.max(...top.flatMap((x) => [x.model, x.market]));
   $("#market").innerHTML = `
@@ -127,30 +169,27 @@ function renderMarket() {
       </div>
     `).join("")}
   `;
-  const r = pearsonCorrelation(top.map((x) => x.model), top.map((x) => x.market));
+  const r = pearson(top.map((x) => x.model), top.map((x) => x.market));
   $("#market-summary").innerHTML = dict.correlation(r.toFixed(2));
 }
 
-function pearsonCorrelation(xs, ys) {
+function pearson(xs, ys) {
   const n = xs.length;
   const mx = xs.reduce((a, b) => a + b, 0) / n;
   const my = ys.reduce((a, b) => a + b, 0) / n;
   let num = 0, dx = 0, dy = 0;
   for (let i = 0; i < n; i++) {
-    const xd = xs[i] - mx;
-    const yd = ys[i] - my;
-    num += xd * yd;
-    dx += xd * xd;
-    dy += yd * yd;
+    num += (xs[i] - mx) * (ys[i] - my);
+    dx += (xs[i] - mx) ** 2;
+    dy += (ys[i] - my) ** 2;
   }
-  if (dx === 0 || dy === 0) return 0;
-  return num / Math.sqrt(dx * dy);
+  return (dx === 0 || dy === 0) ? 0 : num / Math.sqrt(dx * dy);
 }
 
-/* ─────────── Render: Expected groups ─────────── */
+/* ─────────── Groups ─────────── */
 
 function renderGroups() {
-  const html = Object.entries(GROUPS_2026).map(([letter, codes]) => {
+  $("#groups").innerHTML = Object.entries(GROUPS_2026).map(([letter, codes]) => {
     const rows = codes.map((code) => {
       const gp = state.mc.groupPositionDistribution[code];
       if (!gp || gp.total === 0) return { code, avg: 4 };
@@ -177,130 +216,220 @@ function renderGroups() {
       </div>
     `;
   }).join("");
-  $("#groups").innerHTML = html;
 }
 
-/* ─────────── Render: Backtest ─────────── */
+/* ─────────── Backtest (RPS + log-loss) ─────────── */
 
 function renderBacktest() {
   const dict = t();
-  const rows = state.backtest.perTournament.map((r) => {
-    if (r.skipped) return `
-      <div class="bt-row skipped">
-        <span class="bt-year">${r.year}</span>
-        <span class="bt-skipped muted">skipped (${escape(r.skipped)})</span>
-      </div>
-    `;
-    const hitClass = r.championRank === 1 ? "hit-1" : r.championRank <= 3 ? "hit-3" : r.championRank <= 5 ? "hit-5" : "miss";
-    return `
-      <div class="bt-row ${hitClass}">
-        <span class="bt-year">${r.year}</span>
-        <span class="bt-host muted">${escape(r.host.join("/"))}</span>
-        <span class="bt-actual">→ ${escape(teamNameFromEnglish(r.actualChampion))}</span>
-        <span class="bt-top3">${r.modelTop3.map((m) => `<span class="bt-pick">${escape(teamNameFromCode(m.code))} ${pct(m.prob, 0)}</span>`).join("")}</span>
-        <span class="bt-rank">#${r.championRank ?? "?"}</span>
-      </div>
-    `;
-  }).join("");
-  $("#backtest").innerHTML = rows;
+  const rows = state.backtest.perTournament.map((r) => `
+    <tr>
+      <td class="bt-year">${r.year}</td>
+      <td>${escape(teamNameEN(r.actualChampion))}</td>
+      <td>${r.n}</td>
+      <td class="num">${r.rpsElo?.toFixed(3) ?? "—"}</td>
+      <td class="num">${r.rpsDC?.toFixed(3) ?? "—"}</td>
+      <td class="num accent">${r.rpsEnsemble?.toFixed(3) ?? "—"}</td>
+    </tr>
+  `).join("");
+  $("#backtest").innerHTML = `
+    <table class="bt-table">
+      <thead>
+        <tr>
+          <th>Jahr</th>
+          <th>Sieger</th>
+          <th>Spiele</th>
+          <th>RPS Elo</th>
+          <th>RPS DC</th>
+          <th>RPS Ensemble</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
   $("#backtest-summary").innerHTML = dict.backtestSummary(
-    state.backtest.total,
-    state.backtest.top3Hits,
-    state.backtest.avgLogLoss?.toFixed(2) ?? "—",
+    state.backtest.perTournament.length,
+    state.backtest.avgRPSElo?.toFixed(3) ?? "—",
+    state.backtest.avgRPSDC?.toFixed(3) ?? "—",
+    state.backtest.avgRPSEnsemble?.toFixed(3) ?? "—",
   );
 }
 
-function teamNameFromEnglish(name) {
+function teamNameEN(name) {
   return state.locale === "de" && NAMES_DE[name] ? NAMES_DE[name] : name;
 }
 
-function teamNameFromCode(code) {
-  // Backtest uses historical codes that may not match TEAMS_2026 lookup.
-  // Try direct first, fall back to known historical aliases.
-  if (teamByCode[code]) return teamName(code);
-  const HISTORICAL_ALIASES = {
-    PRK: "North Korea", SVK: "Slovakia", SVN: "Slovenia",
-    DNK: "Denmark", DEN: "Denmark", SWE: "Sweden",
-    UKR: "Ukraine", SRB: "Serbia", GRC: "Greece",
-    BIH: "Bosnia and Herzegovina", HND: "Honduras",
-    POL: "Poland", CHL: "Chile", CHI: "Chile",
-    URY: "Uruguay", CMR: "Cameroon", RUS: "Russia",
-    NGA: "Nigeria", CRC: "Costa Rica", BUL: "Bulgaria",
-    ITA: "Italy", AUS: "Australia", PER: "Peru",
-    WAL: "Wales", ISL: "Iceland",
-  };
-  const englishName = HISTORICAL_ALIASES[code] || code;
-  if (state.locale === "de" && NAMES_DE[englishName]) return NAMES_DE[englishName];
-  return englishName;
+/* ─────────── Calibration chart (SVG) ─────────── */
+
+function renderCalibration() {
+  const cells = state.calibration;
+  const w = 320, h = 200, m = 20;
+  const x = (v) => m + v * (w - 2 * m);
+  const y = (v) => h - m - v * (h - 2 * m);
+  const path = cells
+    .filter((c) => c.observed !== null)
+    .map((c, i) => `${i === 0 ? "M" : "L"}${x(c.midPred)},${y(c.observed)}`)
+    .join(" ");
+  const dots = cells
+    .filter((c) => c.observed !== null)
+    .map((c) => `<circle cx="${x(c.midPred)}" cy="${y(c.observed)}" r="${Math.min(6, 2 + c.n / 25)}" fill="var(--accent)" opacity="0.8" />`)
+    .join("");
+  $("#calibration").innerHTML = `
+    <svg viewBox="0 0 ${w} ${h}" class="calibration-chart" aria-label="Calibration chart">
+      <line x1="${x(0)}" y1="${y(0)}" x2="${x(1)}" y2="${y(1)}" stroke="rgba(127,168,150,0.4)" stroke-dasharray="4 3" />
+      <path d="${path}" stroke="var(--accent-2)" fill="none" stroke-width="2" />
+      ${dots}
+      <text x="${m}" y="${h - 4}" font-size="10" fill="var(--muted)">predicted →</text>
+      <text x="${m + 4}" y="${m}" font-size="10" fill="var(--muted)">observed ↑</text>
+    </svg>
+  `;
 }
 
-/* ─────────── Render: Context (historical stats) ─────────── */
+/* ─────────── Context, methodology, sources ─────────── */
 
 function renderContext() {
   const dict = t();
   const top = STATS.ranking[0];
   $("#context").innerHTML = `
     <ul>
-      <li>${dict.statsLeader(escape(teamNameFromEnglish(top.nation)), top.count)}</li>
+      <li>${dict.statsLeader(escape(teamNameEN(top.nation)), top.count)}</li>
       <li>${dict.statsHost(STATS.hostWins, STATS.totalTournaments)}</li>
       <li>${dict.statsContinental(STATS.europeWins, STATS.southAmericaWins)}</li>
     </ul>
   `;
 }
 
-/* ─────────── Render: Methodology + sources ─────────── */
-
 function renderMethodology() {
   const dict = t();
-  $("#methodology").innerHTML = escape(dict.methodologyBlurb);
-  $("#limitations").innerHTML = escape(dict.limitationsBody);
+  $("#methodology-text").innerHTML = dict.methodologyBlurb;
+  $("#limitations-text").innerHTML = dict.limitationsBody;
   $("#sources").innerHTML = DATA_SOURCES.map((s) => `
     <li><a href="${escape(s.url)}" target="_blank" rel="noopener">${escape(s.label)}</a>
       <span class="muted">· ${escape(s.fetched)}</span></li>
   `).join("");
+  $("#references").innerHTML = REFERENCES.map((ref) => `
+    <li><span>${escape(ref.author)} (${escape(ref.year)}). <em>${escape(ref.title)}</em>${ref.venue ? ". " + escape(ref.venue) : ""}.</span></li>
+  `).join("");
+  $("#weights-display").innerHTML = formatWeights();
 }
 
-/* ─────────── Helpers ─────────── */
+const REFERENCES = [
+  { author: "Elo, A. E.", year: 1978, title: "The Rating of Chessplayers, Past and Present" },
+  { author: "Dixon, M. J. & Coles, S. G.", year: 1997, title: "Modelling Association Football Scores and Inefficiencies in the Football Betting Market", venue: "JRSS Series C 46(2): 265-280" },
+  { author: "Karlis, D. & Ntzoufras, I.", year: 2003, title: "Analysis of sports data by using bivariate Poisson models", venue: "The Statistician 52(3)" },
+  { author: "Hvattum, L. M. & Arntzen, H.", year: 2010, title: "Using Elo ratings for match result prediction in association football", venue: "Int. J. Forecasting" },
+  { author: "Forrest, D., Goddard, J. & Simmons, R.", year: 2005, title: "Odds-setters as forecasters: The case of English football", venue: "Int. J. Forecasting" },
+  { author: "Constantinou, A. C.", year: 2019, title: "Dolores: A model that predicts football match outcomes from all over the world", venue: "Machine Learning 108" },
+  { author: "Boshnakov, G., Kharrat, T. & McHale, I. G.", year: 2017, title: "A bivariate Weibull count model for forecasting association football scores", venue: "Int. J. Forecasting" },
+  { author: "Goddard, J.", year: 2005, title: "Regression models for forecasting goals and match results in association football", venue: "Int. J. Forecasting" },
+];
 
-// Map historical English country names to their FIFA code.
-const NAME_TO_CODE = (() => {
-  const m = {};
-  for (const team of TEAMS_2026) m[team.name] = team.code;
-  // Add codes referenced in historical data but not in 2026 field.
-  const HISTORICAL = {
-    "Italy": "ITA", "Sweden": "SWE", "Denmark": "DEN", "Poland": "POL",
-    "Russia": "RUS", "Ukraine": "UKR", "Serbia": "SRB", "Greece": "GRC",
-    "Czech Republic": "CZE", "Slovakia": "SVK", "Slovenia": "SVN",
-    "Chile": "CHL", "Peru": "PER", "Honduras": "HND", "Costa Rica": "CRC",
-    "Wales": "WAL", "Iceland": "ISL", "Bosnia and Herzegovina": "BIH",
-    "Cameroon": "CMR", "Nigeria": "NGA",
-    "Uruguay": "URU", "Australia": "AUS", "Algeria": "ALG",
-  };
-  for (const [name, code] of Object.entries(HISTORICAL)) {
-    if (!m[name]) m[name] = code;
+function formatWeights() {
+  const w = state.mc.weights || DEFAULT_WEIGHTS;
+  return `<strong>Elo</strong> ${pct(w.elo, 0)} · <strong>Dixon-Coles</strong> ${pct(w.dc, 0)} · <strong>Squad</strong> ${pct(w.squad, 0)} · <strong>Markt</strong> ${pct(w.market, 0)}`;
+}
+
+/* ─────────── Scenario toggles ─────────── */
+
+function setupScenarios() {
+  $$(".scenario-toggle").forEach((el) => {
+    const key = el.dataset.toggle;
+    el.checked = state.options[key];
+    el.addEventListener("change", async () => {
+      state.options[key] = el.checked;
+      $("#dashboard").classList.add("recomputing");
+      await new Promise((r) => requestAnimationFrame(r));
+      recompute();
+      renderAll();
+      $("#dashboard").classList.remove("recomputing");
+    });
+  });
+}
+
+/* ─────────── Compute pipeline ─────────── */
+
+function recompute() {
+  state.mc = runEnsembleMonteCarlo(
+    TEAMS_2026, GROUPS_2026, hostCodes, ELO_2026,
+    {
+      squadDelta: state.squadDelta,
+      dcParams: state.dcParams,
+      weights: DEFAULT_WEIGHTS,
+      useHost: state.options.useHost,
+      useSquad: state.options.useSquad,
+      useDC: state.options.useDC,
+      useMarket: state.options.useMarket,
+    },
+    ITERATIONS,
+  );
+  if (state.options.useMarket) {
+    state.blendedTitle = blendWithMarket(state.mc.titleProbability, MARKET_ODDS_2026, DEFAULT_WEIGHTS.market);
+  } else {
+    state.blendedTitle = state.mc.titleProbability;
   }
-  return m;
-})();
-
-function nameToCode(name) {
-  return NAME_TO_CODE[name] || name;
 }
 
-/* ─────────── Boot ─────────── */
+function buildCombinedTournaments() {
+  // Merge knockout-only and group-stage match sets per year, so the
+  // backtest sees as many matches as we have.
+  const byYear = {};
+  for (const t of HISTORICAL_KNOCKOUTS) {
+    byYear[t.year] = {
+      year: t.year, host: t.host, champion: t.champion, runnerUp: t.runnerUp,
+      matches: [...t.matches],
+    };
+  }
+  if (NEW_HISTORICAL_MATCHES) {
+    for (const [yearStr, list] of Object.entries(NEW_HISTORICAL_MATCHES)) {
+      const year = Number(yearStr);
+      const existing = byYear[year] || { year, host: [], champion: null, matches: [] };
+      // Avoid double-counting: HISTORICAL_KNOCKOUTS already has KO for
+      // 2006/2010/2014/2018/2022. NEW_HISTORICAL_MATCHES adds group matches
+      // for those plus full data (group+KO) for 1994/1998/2002.
+      const existingKeys = new Set(existing.matches.map((m) => `${m.stage}|${m.teamA}|${m.teamB}|${m.scoreA}|${m.scoreB}`));
+      for (const m of list) {
+        const k = `${m.stage}|${m.teamA}|${m.teamB}|${m.scoreA}|${m.scoreB}`;
+        if (!existingKeys.has(k)) {
+          existing.matches.push(m);
+          existingKeys.add(k);
+        }
+      }
+      // Hosts: derive from the year's data if not already known.
+      if (!existing.host?.length) {
+        const HOST = { 1994: ["United States"], 1998: ["France"], 2002: ["South Korea", "Japan"] };
+        existing.host = HOST[year] || [];
+      }
+      if (!existing.champion) {
+        const CH = { 1994: "Brazil", 1998: "France", 2002: "Brazil" };
+        existing.champion = CH[year];
+      }
+      byYear[year] = existing;
+    }
+  }
+  return Object.values(byYear).sort((a, b) => a.year - b.year);
+}
 
-async function compute() {
-  // 2026 Monte-Carlo
-  state.mc = runMonteCarlo(TEAMS_2026, GROUPS_2026, hostCodes, ELO_2026, ITERATIONS, 2026);
-  // Backtest 2006-2022
-  state.backtest = runKnockoutBacktest(HISTORICAL_KNOCKOUTS, HISTORICAL_ELO, nameToCode, BACKTEST_ITERATIONS);
+async function bootstrap() {
+  const combined = buildCombinedTournaments();
+  // 1. Fit DC on ALL historical matches (group + KO across all years).
+  state.dcParams = fitDCOnHistorical(HISTORICAL_KNOCKOUTS, HISTORICAL_ELO, NEW_HISTORICAL_MATCHES);
+  // 2. Squad-strength deltas.
+  state.squadDelta = SQUAD_INDEX_2026 ? squadEloAdjustments(SQUAD_INDEX_2026) : null;
+  // 3. RPS backtest + calibration on combined data.
+  state.backtest = runRPSBacktest(combined, HISTORICAL_ELO, state.dcParams, state.squadDelta);
+  state.calibration = calibrationBins(combined, HISTORICAL_ELO, state.dcParams, 8);
+  // 4. Monte-Carlo for 2026.
+  recompute();
 }
 
 function renderAll() {
   renderTop3();
+  renderModelBreakdown();
   renderDistribution();
   renderMarket();
   renderGroups();
   renderBacktest();
+  renderCalibration();
   renderContext();
   renderMethodology();
   fireConfetti();
@@ -317,8 +446,8 @@ function fireConfetti() {
   canvas.style.height = innerHeight + "px";
   ctx.scale(dpr, dpr);
   const colors = ["#00d97e", "#ffd166", "#ef476f", "#7fa896", "#ffffff"];
-  const parts = Array.from({ length: 120 }, () => ({
-    x: innerWidth / 2 + (Math.random() - 0.5) * 80, y: 180,
+  const parts = Array.from({ length: 100 }, () => ({
+    x: innerWidth / 2 + (Math.random() - 0.5) * 80, y: 200,
     vx: (Math.random() - 0.5) * 8, vy: -Math.random() * 9 - 3,
     g: 0.25 + Math.random() * 0.15, size: 4 + Math.random() * 5,
     rot: Math.random() * Math.PI, vr: (Math.random() - 0.5) * 0.4,
@@ -346,7 +475,6 @@ function fireConfetti() {
 
 document.addEventListener("DOMContentLoaded", async () => {
   applyI18n();
-
   $$(".lang-btn").forEach((b) => b.addEventListener("click", () => {
     state.locale = b.dataset.lang;
     document.documentElement.lang = state.locale;
@@ -354,16 +482,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     applyI18n();
     if (state.mc) renderAll();
   }));
-
   $("#toggle-distribution").addEventListener("click", () => {
     state.showAll = !state.showAll;
     renderDistribution();
   });
-
-  // Defer compute to next frame so the loading card paints first.
+  setupScenarios();
   requestAnimationFrame(async () => {
-    await new Promise((r) => setTimeout(r, 16));
-    await compute();
+    await new Promise((r) => setTimeout(r, 30));
+    await bootstrap();
     $("#loading").hidden = true;
     $("#dashboard").hidden = false;
     renderAll();

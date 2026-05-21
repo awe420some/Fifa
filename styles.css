@@ -251,6 +251,78 @@ footer.foot {
   color: var(--muted); font-size: 0.8rem;
 }
 
+/* Scenario toggles */
+.scenario-row {
+  display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+  margin-top: 16px; padding-top: 14px;
+  border-top: 1px solid var(--line);
+  font-size: 0.85rem;
+}
+.scenario-row h4 {
+  margin: 0; font-size: 0.75rem; letter-spacing: 1px;
+  color: var(--muted); text-transform: uppercase;
+}
+.scenario-row label {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: rgba(0,217,126,0.06); border: 1px solid var(--line);
+  padding: 4px 10px; border-radius: 999px; cursor: pointer;
+  transition: border-color 0.12s ease;
+}
+.scenario-row label:hover { border-color: var(--accent); }
+.scenario-row input[type="checkbox"] {
+  accent-color: var(--accent); cursor: pointer;
+}
+#dashboard.recomputing { opacity: 0.6; transition: opacity 0.1s ease; }
+
+/* Model breakdown table */
+.breakdown-table {
+  width: 100%; border-collapse: collapse; font-size: 0.9rem;
+}
+.breakdown-table th {
+  text-align: right; padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.72rem; letter-spacing: 1px;
+  color: var(--muted); text-transform: uppercase;
+}
+.breakdown-table th:first-child, .breakdown-table td:first-child { text-align: left; }
+.breakdown-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  font-variant-numeric: tabular-nums;
+}
+.breakdown-table td.num { text-align: right; }
+.breakdown-table td.accent { color: var(--accent-2); font-weight: 600; }
+
+/* Backtest table (refreshed) */
+.bt-table {
+  width: 100%; border-collapse: collapse; font-size: 0.88rem;
+}
+.bt-table th {
+  text-align: right; padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.7rem; letter-spacing: 1px;
+  color: var(--muted); text-transform: uppercase;
+}
+.bt-table th:nth-child(1), .bt-table th:nth-child(2) { text-align: left; }
+.bt-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  font-variant-numeric: tabular-nums;
+}
+.bt-table td.num { text-align: right; }
+.bt-table td.accent { color: var(--accent); font-weight: 600; }
+.bt-table .bt-year { color: var(--accent-2); font-weight: 700; }
+
+/* Calibration */
+.calibration-chart {
+  width: 100%; max-width: 360px; height: auto;
+  margin: 8px 0; background: var(--bg-2);
+  border: 1px solid var(--line); border-radius: 8px;
+  padding: 6px;
+}
+
+.small { font-size: 0.75rem; }
+
 .reveal {
   opacity: 0; animation: reveal 0.55s ease forwards;
   animation-delay: var(--delay, 0.1s);

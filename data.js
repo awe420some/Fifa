@@ -3,6 +3,11 @@
 // see DATA_SOURCES at the bottom. No values are fabricated — fields that
 // had to be estimated are flagged inline.
 
+// Re-exports of the bigger datasets that live in /data so this file
+// stays scannable.
+export { NEW_HISTORICAL_MATCHES, SQUAD_INDEX_2026, SQUAD_INDEX_2026_META } from "./data/historical-matches.js";
+
+
 /* ─────────── 2026 field ─────────── */
 
 // 48 qualified nations per Wikipedia (https://en.wikipedia.org/wiki/2026_FIFA_World_Cup).
@@ -284,9 +289,9 @@ export const HISTORICAL_ELO = {
   2010: { ESP: 2080, BRA: 2080, NED: 1965, GER: 1900, ARG: 1965, URU: 1825,
           GHA: 1700, PAR: 1740, ENG: 1900, ITA: 1850, FRA: 1830, POR: 1870,
           USA: 1715, MEX: 1735, CHL: 1830, JPN: 1620, KOR: 1690, SUI: 1730,
-          CIV: 1735, SRB: 1700, SVK: 1620, SVN: 1635, DNK: 1750, AUS: 1670,
-          NGA: 1690, ALG: 1525, CMR: 1610, PRK: 1340, NZL: 1395, HND: 1450,
-          GRC: 1690, RSA: 1490 },
+          CIV: 1735, SRB: 1700, SVK: 1620, SVN: 1635, DNK: 1750, DEN: 1750, AUS: 1670,
+          NGA: 1690, ALG: 1525, CMR: 1610, PRK: 1340, NZL: 1395, HND: 1450, HON: 1450,
+          GRC: 1690, GRE: 1690, RSA: 1490 },
   2014: { GER: 1995, ARG: 1990, BRA: 2045, NED: 1955, COL: 1885, FRA: 1855,
           BEL: 1820, CRC: 1620, CHL: 1820, MEX: 1820, URU: 1845, SUI: 1745,
           GRC: 1690, ALG: 1655, USA: 1750, NGA: 1630, ECU: 1745, ESP: 1995,
@@ -305,6 +310,22 @@ export const HISTORICAL_ELO = {
           POL: 1745, IRN: 1715, SEN: 1735, MAR: 1780, ECU: 1860, TUN: 1680,
           AUS: 1620, CMR: 1620, CAN: 1730, KSA: 1640, GHA: 1525, WAL: 1750,
           CRC: 1635, QAT: 1545 },
+  1994: { BRA: 2070, ITA: 1945, GER: 1975, ARG: 1980, NED: 1900, ESP: 1860,
+          SWE: 1820, ROU: 1755, BUL: 1715, COL: 1810, USA: 1715, MEX: 1750,
+          BEL: 1825, IRL: 1745, SUI: 1700, NOR: 1755, KOR: 1640, BOL: 1505,
+          CMR: 1620, MAR: 1535, KSA: 1490, GRE: 1690, NGA: 1670, RUS: 1880 },
+  1998: { BRA: 2080, FRA: 1850, GER: 1930, ARG: 1990, NED: 1920, ITA: 1925,
+          ESP: 1880, ENG: 1830, ROU: 1755, NOR: 1755, YUG: 1845, CRO: 1800,
+          MEX: 1820, USA: 1685, NGA: 1700, JPN: 1620, BEL: 1755, MAR: 1640,
+          CHI: 1810, AUT: 1685, SCO: 1740, KOR: 1650, IRN: 1620, COL: 1815,
+          TUN: 1620, PAR: 1745, RSA: 1490, JAM: 1620, KSA: 1490, CMR: 1610,
+          DEN: 1830, BUL: 1715 },
+  2002: { BRA: 2055, GER: 1880, ARG: 2010, FRA: 1985, ITA: 1955, ESP: 1955,
+          ENG: 1860, POR: 1880, MEX: 1800, IRL: 1755, URU: 1810, JPN: 1700,
+          KOR: 1685, SEN: 1660, USA: 1665, BEL: 1800, NGA: 1655, RUS: 1815,
+          TUR: 1840, CRO: 1815, PAR: 1745, CMR: 1645, SVN: 1635, ECU: 1735,
+          DEN: 1810, SWE: 1810, CRC: 1620, CHN: 1565, RSA: 1565, TUN: 1620,
+          POL: 1740, KSA: 1490 },
 };
 export const HISTORICAL_ELO_META = {
   source: "Rounded reconstruction from FiveThirtyEight / eloratings.net archives.",
@@ -403,9 +424,18 @@ export const I18N = {
     marketLabel: "Market",
     correlation: (r) => `Model–market correlation: <strong>${r}</strong>`,
     bookmakers: "Bookmakers & prediction markets",
-    backtestHeader: "Year · Champion · Model top-3 · Champion model rank",
-    backtestSummary: (n, hits3, logloss) =>
-      `${n} tournaments backtested · Champion in model top-3: <strong>${hits3}/${n}</strong> · Avg log-loss: <strong>${logloss}</strong>`,
+    backtestHeader: "Year · Champion · Matches · RPS per model",
+    backtestSummary: (n, rpsElo, rpsDC, rpsEns) =>
+      `${n} tournaments · avg RPS — Elo <strong>${rpsElo}</strong> · Dixon-Coles <strong>${rpsDC}</strong> · Ensemble <strong>${rpsEns}</strong>`,
+    scenarioHeader: "Scenario toggles",
+    scenarioHost: "Home advantage",
+    scenarioSquad: "Squad strength",
+    scenarioDC: "Dixon-Coles",
+    scenarioMarket: "Market consensus",
+    weightsLabel: "Ensemble weights:",
+    calibrationHeader: "Match-level calibration",
+    referencesHeader: "Academic references",
+    modelBreakdownHeader: "Model breakdown (top 5)",
     methodologyBlurb: "Each match is sampled twice from a Poisson distribution whose mean is the team's expected goals: μ = 1.42 + 0.55·(Elo − Opp + Host)/400. Home support is +80 Elo for matches played in the supporter's country. Group ties resolve on points → goal-diff → goals-for; knockout ties resolve via Elo-dampened shootout. 10 000 simulated tournaments aggregate to the empirical probability distribution shown.",
     limitations: "Limitations",
     limitationsBody: "Bracket is a hand-balanced scenario draw (the official draw is the December 2025 procedure). Pre-tournament Elos for the 2006–2022 backtest are rounded reconstructions, accurate to ±25 Elo — fine for top-3 ranking, not for fine-grained log-loss calibration. Player-level injuries/form are not modelled — strength sits at the team-Elo level.",
@@ -434,9 +464,18 @@ export const I18N = {
     marketLabel: "Markt",
     correlation: (r) => `Modell–Markt Korrelation: <strong>${r}</strong>`,
     bookmakers: "Buchmacher & Prognose-Märkte",
-    backtestHeader: "Jahr · Sieger · Modell-Top-3 · Modell-Rang des Siegers",
-    backtestSummary: (n, hits3, logloss) =>
-      `${n} Turniere zurückgerechnet · Sieger im Modell-Top-3: <strong>${hits3}/${n}</strong> · Ø Log-Loss: <strong>${logloss}</strong>`,
+    backtestHeader: "Jahr · Sieger · Spiele · RPS pro Modell",
+    backtestSummary: (n, rpsElo, rpsDC, rpsEns) =>
+      `${n} Turniere · Ø RPS — Elo <strong>${rpsElo}</strong> · Dixon-Coles <strong>${rpsDC}</strong> · Ensemble <strong>${rpsEns}</strong>`,
+    scenarioHeader: "Szenario-Schalter",
+    scenarioHost: "Heimvorteil",
+    scenarioSquad: "Kader-Stärke",
+    scenarioDC: "Dixon-Coles",
+    scenarioMarket: "Marktkonsens",
+    weightsLabel: "Ensemble-Gewichte:",
+    calibrationHeader: "Spiel-Kalibrierung",
+    referencesHeader: "Wissenschaftliche Quellen",
+    modelBreakdownHeader: "Modell-Aufschlüsselung (Top 5)",
     methodologyBlurb: "Jedes Spiel wird zweifach aus einer Poisson-Verteilung gezogen, deren Mittelwert μ = 1,42 + 0,55·(Elo − Gegner + Heim)/400 die erwarteten Tore ist. Heimvorteil +80 Elo für Spiele im Land des Teams. Gruppen-Gleichstand: Punkte → Tordifferenz → Tore. K.-o.-Gleichstand: Elo-gedämpftes Elfmeterschießen. 10 000 simulierte Turniere ergeben die gezeigte empirische Wahrscheinlichkeitsverteilung.",
     limitations: "Grenzen des Modells",
     limitationsBody: "Die Gruppenauslosung ist ein plausibles Szenario (die echte Auslosung erfolgt im Dezember 2025). Pre-Turnier-Elo-Werte für 2006–2022 sind gerundete Rekonstruktionen mit ±25 Genauigkeit — ausreichend für Top-3-Ranking, nicht für feine Log-Loss-Kalibrierung. Verletzungen / Tagesform einzelner Spieler werden nicht modelliert — Stärke bleibt auf Mannschafts-Elo-Ebene.",

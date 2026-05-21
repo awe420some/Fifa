@@ -48,6 +48,18 @@
       <section class="card top3-card">
         <h3 data-i18n="sectionTop3">Top 3 Favorites</h3>
         <div id="top3" class="top3-grid"></div>
+        <div class="scenario-row">
+          <h4 data-i18n="scenarioHeader">Scenario toggles</h4>
+          <label><input class="scenario-toggle" type="checkbox" data-toggle="useHost" checked><span data-i18n="scenarioHost">Home advantage</span></label>
+          <label><input class="scenario-toggle" type="checkbox" data-toggle="useSquad" checked><span data-i18n="scenarioSquad">Squad strength</span></label>
+          <label><input class="scenario-toggle" type="checkbox" data-toggle="useDC" checked><span data-i18n="scenarioDC">Dixon-Coles</span></label>
+          <label><input class="scenario-toggle" type="checkbox" data-toggle="useMarket" checked><span data-i18n="scenarioMarket">Market consensus</span></label>
+        </div>
+      </section>
+
+      <section class="card wide reveal">
+        <h3 data-i18n="modelBreakdownHeader">Model breakdown</h3>
+        <div id="model-breakdown"></div>
       </section>
 
       <section class="card wide reveal">
@@ -68,9 +80,12 @@
       </section>
 
       <section class="card wide reveal">
-        <h3 data-i18n="sectionBacktest">Backtest 2006–2022</h3>
+        <h3 data-i18n="sectionBacktest">Backtest 1994–2022</h3>
         <div id="backtest-summary" class="muted"></div>
         <div id="backtest"></div>
+        <h4 data-i18n="calibrationHeader">Match-level calibration</h4>
+        <div id="calibration"></div>
+        <p class="muted small">Dots: each prediction-probability bin · diagonal = perfect calibration · point size scales with sample count.</p>
       </section>
 
       <section class="card wide reveal">
@@ -80,10 +95,15 @@
 
       <section class="card wide reveal">
         <h3 data-i18n="sectionSources">Data Sources & Methodology</h3>
-        <p id="methodology" class="muted"></p>
+        <p id="methodology-text" class="muted"></p>
+        <p class="muted"><span data-i18n="weightsLabel">Ensemble weights:</span> <span id="weights-display"></span></p>
         <h4 data-i18n="limitations">Limitations</h4>
-        <p id="limitations" class="muted"></p>
+        <p id="limitations-text" class="muted"></p>
+        <h4>Data sources</h4>
         <ul id="sources" class="source-list"></ul>
+        <h4 data-i18n="referencesHeader">Academic references</h4>
+        <ul id="references" class="source-list"></ul>
+        <p class="muted small">Full methodology with equations: <a href="METHODOLOGY.md" target="_blank">METHODOLOGY.md</a></p>
       </section>
     </div>
 
