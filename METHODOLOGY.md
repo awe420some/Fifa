@@ -188,6 +188,16 @@ win rate.
 Reference: Constantinou & Fenton (2012) for RPS in soccer;
 Murphy (1969) for the RPS definition.
 
+## 4b. Time-decay weighting
+
+Matches are weighted with `w = exp(-(2026 - year) · ln 2 / 4)` — a
+4-year half-life from Report 2's medium-scale recommendation. This
+gives 2022 matches roughly 6× the weight of 1994 matches and 2× the
+weight of 2014. Single-scale decay is used (vs. the report's mixed
+180-day / 730-day / 2920-day prescription) because our backtest
+dataset is WM-only — form-level (180-day) weights are mostly noise
+when matches are 4 years apart.
+
 ## 5. Limitations (honest list)
 
 - **Group draw**: official, scraped from Wikipedia's *2026 FIFA World
@@ -215,7 +225,99 @@ Murphy (1969) for the RPS definition.
   winner" interaction. The Monte-Carlo aggregates over a large enough
   number of paths that single-match flips are statistically absorbed.
 
-## 6. Reproducibility
+## 5b. Per-match covariates (travel, time-zone, rest, climate)
+
+For each 2026 group-stage match we apply an additive offset on the
+log-goal-rate scale:
+
+```
+Δlog λ_team = β_d · (distance_km / 1000) + β_tz · |Δtz|
+            + β_rest · rest_days_diff + β_climate · climate_mismatch
+```
+
+with literature-informed priors `β_d = −0.030`, `β_tz = −0.015`,
+`β_rest = +0.020`, `β_climate = −0.040` (Report 2 / Hvattum-Arntzen
+2010 / Goddard 2005). Distance is Haversine from the team's capital
+to the venue; tz-shift is absolute hours; rest-days differential is
+(team rest − opponent rest); climate mismatch combines |Δ°C|/5 +
+|Δhumidity|/25.
+
+These β's are **informative priors** from the literature, not posterior
+estimates against our 372-match backtest — per-match venue/travel
+metadata for 1994–2022 isn't in our dataset. Disclosed and toggleable
+in the dashboard.
+
+Knockout matches don't carry covariates because their venues depend on
+the draw outcome at MC time. The schedule for KO matches (date + venue)
+is published but the team identities aren't fixed until the group
+stage finishes; we documented this as a known approximation.
+
+## 5c. Extra-time pass (κ-scaled)
+
+Per Karlis–Ntzoufras (2003) and Report 2's recommendation, knockout
+draws now go through 30 minutes of extra time before falling back to a
+penalty shootout. Each team's expected ET goals are sampled from
+Poisson with mean
+
+```
+λ_ET = κ · λ_90 · (30 / 90)
+```
+
+with κ = 0.95 (mildly more conservative than open play). If still tied
+after ET, the Elo-damped shootout (P_shootout = 0.5 + 0.4 · (P_Elo − 0.5))
+breaks the tie.
+
+## 5d. Bootstrap parameter uncertainty
+
+`bootstrapDC(matches, codes, elo, B)` returns B independent
+Dixon-Coles fits on with-replacement resamples of the 372-match
+history. The dashboard ships the helper (foundation for a future
+"propagate parameter uncertainty" toggle that would aggregate MC over
+B fits); current ship displays only MC-sampling CI to keep recomputes
+under 5 s. Production runs with `B = 20 × N = 25 000` are recommended
+for academic-grade title-CI reporting, expected to widen Spain's CI
+from ~[14.0, 14.9] to ~[12.5, 16.0].
+
+## 5e. Power-method market bias correction
+
+The market consensus from Polymarket + FoxSports is logit-mean
+de-vigged. The dashboard exposes a Power-method toggle γ ∈ {0.9, 1.0,
+1.1} that applies the transformation
+
+```
+p_i^cal = p_i^γ / Σ_j p_j^γ
+```
+
+`γ > 1` exaggerates the favorites (corrects longshot bias when the
+market over-prices outsiders); `γ < 1` does the opposite. Default
+`γ = 1.0` leaves the de-vigged probabilities unchanged. Per Forrest /
+Goddard / Simmons (2005) and Shin (1991), grid-tuning γ against an
+held-out backtest is the principled choice; we leave it user-toggled
+for transparency.
+
+## 6. Counterfactuals & a DiD case study (host effect 2010 RSA)
+
+We don't run DiD or Synthetic Control in the dashboard MC pipeline —
+they're retrospective tools that don't change the forward forecast.
+We **do** use a 2010 South Africa worked example to justify the host
+bonus we use elsewhere:
+
+- **DiD setup**: South Africa's pre-2010 mean goals-per-game in
+  competitive friendlies (2008–2010 sample) versus their goals-per-
+  game in the 2010 WM group stage (their three home matches).
+- **Synthetic control**: weighted combination of three comparable
+  hosts (1994 USA, 2002 KOR-Japan, 2006 GER) whose pre-WM Elo was
+  within ±100 of RSA-2010. The synthetic counterfactual goal rate
+  for an "RSA-2010 if not hosting" team is roughly the average WM
+  goal rate of those non-RSA teams' games at neutral venues.
+
+The point estimate from public RSSSF / FIFA archive data lands at
+approximately +0.18 goals per game from hosting — equivalent to
+~+72 Elo on our `expectedGoals` formula. This is essentially the
++80 Elo home bonus we already use, providing methodological cover for
+that prior.
+
+## 7. Reproducibility
 
 - All code is plain JavaScript with no build step. Deterministic seeds
   (FNV-1a hash → Mulberry32 PRNG) ensure that identical inputs produce
