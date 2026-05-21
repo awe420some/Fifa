@@ -26,6 +26,7 @@ metric in the academic literature.
 | 48 qualified teams + pots| Wikipedia, *2026 FIFA World Cup*                   | 2026-05-20 |
 | Elo per team             | Wikipedia mirror of eloratings.net                 | 2026-01-19 |
 | Bookmaker odds aggregate | Polymarket + FoxSports + Oddschecker (top-4 only)  | 2026-05-20 |
+| 2026 group draw          | Wikipedia, *2026 FIFA World Cup seeding* (Dec 2025) | 2026-05-20 |
 | 26-man squad share       | Wikipedia, *2026 FIFA World Cup squads*            | 2026-05-21 |
 | Historical matches       | Wikipedia per-group + knockout articles, 1994–2022 | 2026-05-20 |
 | Pre-WM Elo per year      | Rounded reconstruction from public archives        | various    |
@@ -189,10 +190,11 @@ Murphy (1969) for the RPS definition.
 
 ## 5. Limitations (honest list)
 
-- **Group draw**: 12-group structure is a plausible scenario, hand-balanced
-  by pot and confederation. The official 2026 draw was in December 2025
-  but we don't scrape the exact bracket. Every probability is conditional
-  on the assumed draw.
+- **Group draw**: official, scraped from Wikipedia's *2026 FIFA World
+  Cup seeding* article (Final Draw at the Kennedy Center, Washington
+  D.C., 5 December 2025). Cross-checked against MLSSoccer's draw
+  results writeup. Every probability is conditional on this exact draw
+  and the assumed pot structure.
 - **Market sources**: Five of seven attempted bookmaker / prediction
   market sources are blocked from our runtime (Pinnacle 404, Bet365 /
   DraftKings 403/503, Kalshi 429, Smarkets client-rendered SPA,

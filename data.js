@@ -114,23 +114,23 @@ export const MARKET_ODDS_2026_META = {
   method: "Average implied prob of Polymarket + FoxSports, normalized. Bottom-28 floored at 0.15%.",
 };
 
-// Plausible 12-group draw. The real draw runs in December 2025 — without
-// scraping the bracket page we hand-balance one team per pot per group.
-// Each team appears in exactly one group. Documented as a "scenario draw"
-// in the UI so users understand the probabilities are conditional on this.
+// Official 12-group draw as announced at the FIFA Final Draw on
+// December 5, 2025 at the Kennedy Center, Washington D.C.
+// Source: Wikipedia "2026 FIFA World Cup seeding" (fetched 2026-05-20),
+// cross-checked with MLSSoccer.com "FIFA 2026 World Cup draw: Full results".
 export const GROUPS_2026 = {
-  A: ["MEX", "CRO", "ALG", "IRQ"],   // host · UEFA · CAF · AFC
-  B: ["CAN", "SEN", "EGY", "KSA"],   // host · CAF · CAF · AFC
-  C: ["USA", "JPN", "PAN", "JOR"],   // host · AFC · CONCACAF · AFC
-  D: ["FRA", "URU", "NOR", "COD"],
-  E: ["ARG", "GER", "AUS", "NZL"],
-  F: ["ENG", "COL", "SCO", "GHA"],
-  G: ["ESP", "AUT", "SWE", "HAI"],
-  H: ["POR", "ECU", "PAR", "CPV"],
-  I: ["BRA", "KOR", "CIV", "BIH"],
-  J: ["NED", "SUI", "CZE", "RSA"],
-  K: ["MAR", "IRN", "TUN", "CUW"],
-  L: ["BEL", "TUR", "UZB", "QAT"],
+  A: ["MEX", "RSA", "KOR", "CZE"],
+  B: ["CAN", "BIH", "QAT", "SUI"],
+  C: ["BRA", "MAR", "HAI", "SCO"],
+  D: ["USA", "PAR", "AUS", "TUR"],
+  E: ["GER", "CUW", "CIV", "ECU"],
+  F: ["NED", "JPN", "SWE", "TUN"],
+  G: ["BEL", "EGY", "IRN", "NZL"],
+  H: ["ESP", "CPV", "KSA", "URU"],
+  I: ["FRA", "SEN", "IRQ", "NOR"],
+  J: ["ARG", "ALG", "AUT", "JOR"],
+  K: ["POR", "COD", "UZB", "COL"],
+  L: ["ENG", "CRO", "GHA", "PAN"],
 };
 
 /* ─────────── Historical knockout-stage data (for backtest) ─────────── */
@@ -438,7 +438,7 @@ export const I18N = {
     modelBreakdownHeader: "Model breakdown (top 5)",
     methodologyBlurb: "Each match is sampled twice from a Poisson distribution whose mean is the team's expected goals: μ = 1.42 + 0.55·(Elo − Opp + Host)/400. Home support is +80 Elo for matches played in the supporter's country. Group ties resolve on points → goal-diff → goals-for; knockout ties resolve via Elo-dampened shootout. 10 000 simulated tournaments aggregate to the empirical probability distribution shown.",
     limitations: "Limitations",
-    limitationsBody: "Bracket is a hand-balanced scenario draw (the official draw is the December 2025 procedure). Pre-tournament Elos for the 2006–2022 backtest are rounded reconstructions, accurate to ±25 Elo — fine for top-3 ranking, not for fine-grained log-loss calibration. Player-level injuries/form are not modelled — strength sits at the team-Elo level.",
+    limitationsBody: "Pre-tournament Elos for the 1994–2022 backtest are rounded reconstructions, accurate to ±25 Elo — fine for top-3 ranking, not for fine-grained log-loss calibration. Player-level injuries/form are not modelled — strength sits at the team-Elo level. Bookmaker market is built from two reachable sources (Polymarket + FoxSports); five other books (Pinnacle, Bet365, DraftKings, Kalshi, Smarkets) are geo- or bot-blocked from this runtime and would need a paid odds-API key to integrate.",
     footer: "Built on public Elo + market data · educational use, not for betting.",
     statsLeader: (nation, count) => `${nation} leads with ${count} titles since 1930.`,
     statsContinental: (eu, sa) => `Europe ${eu} — South America ${sa} (rest of world: 0).`,
@@ -478,7 +478,7 @@ export const I18N = {
     modelBreakdownHeader: "Modell-Aufschlüsselung (Top 5)",
     methodologyBlurb: "Jedes Spiel wird zweifach aus einer Poisson-Verteilung gezogen, deren Mittelwert μ = 1,42 + 0,55·(Elo − Gegner + Heim)/400 die erwarteten Tore ist. Heimvorteil +80 Elo für Spiele im Land des Teams. Gruppen-Gleichstand: Punkte → Tordifferenz → Tore. K.-o.-Gleichstand: Elo-gedämpftes Elfmeterschießen. 10 000 simulierte Turniere ergeben die gezeigte empirische Wahrscheinlichkeitsverteilung.",
     limitations: "Grenzen des Modells",
-    limitationsBody: "Die Gruppenauslosung ist ein plausibles Szenario (die echte Auslosung erfolgt im Dezember 2025). Pre-Turnier-Elo-Werte für 2006–2022 sind gerundete Rekonstruktionen mit ±25 Genauigkeit — ausreichend für Top-3-Ranking, nicht für feine Log-Loss-Kalibrierung. Verletzungen / Tagesform einzelner Spieler werden nicht modelliert — Stärke bleibt auf Mannschafts-Elo-Ebene.",
+    limitationsBody: "Pre-Turnier-Elos für den 1994–2022-Backtest sind gerundete Rekonstruktionen mit ±25 Genauigkeit — ausreichend für Top-3-Ranking, nicht für feine Log-Loss-Kalibrierung. Verletzungen / Tagesform einzelner Spieler werden nicht modelliert — Stärke bleibt auf Mannschafts-Elo-Ebene. Marktdaten kommen aus zwei erreichbaren Quellen (Polymarket + FoxSports); fünf weitere Buchmacher (Pinnacle, Bet365, DraftKings, Kalshi, Smarkets) sind aus dieser Laufzeitumgebung geo- oder bot-geblockt und bräuchten einen kostenpflichtigen Odds-API-Schlüssel.",
     footer: "Basierend auf öffentlichen Elo- und Marktdaten · Bildungszweck, nicht zum Wetten.",
     statsLeader: (nation, count) => `${nation} führt mit ${count} Titeln seit 1930.`,
     statsContinental: (eu, sa) => `Europa ${eu} — Südamerika ${sa} (Rest der Welt: 0).`,
@@ -491,6 +491,9 @@ export const I18N = {
 export const DATA_SOURCES = [
   { label: "2026 FIFA World Cup — Wikipedia (teams, pots, hosts)",
     url:   "https://en.wikipedia.org/wiki/2026_FIFA_World_Cup",
+    fetched: "2026-05-20" },
+  { label: "2026 FIFA World Cup seeding — Wikipedia (official December 2025 draw)",
+    url:   "https://en.wikipedia.org/wiki/2026_FIFA_World_Cup_seeding",
     fetched: "2026-05-20" },
   { label: "World Football Elo Ratings — Wikipedia / Module:SportsRankings",
     url:   "https://en.wikipedia.org/wiki/World_Football_Elo_Ratings",
