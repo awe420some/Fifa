@@ -33,15 +33,25 @@ jobs:
         run: node scripts/scrape-bookmakers.mjs
         continue-on-error: true
 
-      - name: Commit snapshot if changed
-        if: steps.scrape.outcome == 'success'
+      - name: Run forecast snapshot
+        id: forecast
+        run: node scripts/snapshot-forecast.mjs
+        continue-on-error: true
+
+      - name: Commit snapshots if changed
+        if: steps.scrape.outcome == 'success' || steps.forecast.outcome == 'success'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if ! git diff --quiet data/market-snapshot.json; then
-            git add data/market-snapshot.json
-            git commit -m "Refresh bookmaker odds snapshot ($(date -u +%Y-%m-%d))"
+          changed=0
+          for f in data/market-snapshot.json data/title-history.json; do
+            if [ -f "$f" ] && ! git diff --quiet "$f"; then
+              git add "$f"; changed=1
+            fi
+          done
+          if [ "$changed" = "1" ]; then
+            git commit -m "Refresh odds + forecast snapshot ($(date -u +%Y-%m-%d))"
             git push
           else
-            echo "Snapshot unchanged; nothing to commit."
+            echo "No changes to commit."
           fi

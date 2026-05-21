@@ -206,6 +206,21 @@ function clone(p) {
   };
 }
 
+// Bootstrap resample: returns B independently fitted parameter sets,
+// each from a with-replacement resample of the input match list.
+// Used by the dashboard's "parameter uncertainty" toggle to propagate
+// fit uncertainty into the Monte-Carlo title distribution.
+export function bootstrapDC(matches, teamCodes, eloMap, B = 20, opts = {}) {
+  const fits = [];
+  const n = matches.length;
+  for (let b = 0; b < B; b++) {
+    const sample = new Array(n);
+    for (let i = 0; i < n; i++) sample[i] = matches[Math.floor(Math.random() * n)];
+    fits.push(fitDixonColes(sample, teamCodes, eloMap, opts));
+  }
+  return fits;
+}
+
 // Given fitted params, compute outcome probabilities for an arbitrary match.
 // hostFlag ∈ {+1, 0, -1}: +1 home for A, 0 neutral, -1 home for B.
 export function dcMatchOutcome(teamA, teamB, params, hostFlag = 0) {

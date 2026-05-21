@@ -54,6 +54,15 @@
           <label><input class="scenario-toggle" type="checkbox" data-toggle="useSquad" checked><span data-i18n="scenarioSquad">Squad strength</span></label>
           <label><input class="scenario-toggle" type="checkbox" data-toggle="useDC" checked><span data-i18n="scenarioDC">Dixon-Coles</span></label>
           <label><input class="scenario-toggle" type="checkbox" data-toggle="useMarket" checked><span data-i18n="scenarioMarket">Market consensus</span></label>
+          <label><input class="scenario-toggle" type="checkbox" data-toggle="useCovariates" checked><span data-i18n="scenarioCovariates">Travel / TZ / Rest / Climate</span></label>
+          <label class="gamma-pick">
+            <span data-i18n="biasCorrection">Bias correction γ</span>
+            <select id="market-gamma">
+              <option value="0.9">0.9 (longshot lift)</option>
+              <option value="1.0" selected>1.0 (none)</option>
+              <option value="1.1">1.1 (power method)</option>
+            </select>
+          </label>
         </div>
       </section>
 
@@ -91,6 +100,12 @@
         <h4 data-i18n="calibrationHeader">Match-level calibration</h4>
         <div id="calibration"></div>
         <p class="muted small">Dots: each prediction-probability bin · diagonal = perfect calibration · point size scales with sample count.</p>
+      </section>
+
+      <section class="card wide reveal" id="history-card" hidden>
+        <h3 data-i18n="sectionHistory">Title-Probability Over Time</h3>
+        <div id="title-history"></div>
+        <p class="muted small" data-i18n="historyHint">Updated weekly by the scrape-odds GitHub Action.</p>
       </section>
 
       <section class="card wide reveal">

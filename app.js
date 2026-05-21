@@ -14,9 +14,8 @@ import {
 import { squadEloAdjustments } from "./models/squad.js";
 import { DEFAULT_WEIGHTS } from "./models/ensemble.js";
 import { aggregateMarket, deVig } from "./models/market.js";
+import { buildCovariateProvider } from "./predictor.js";
 
-// Try to load a refreshed market snapshot committed by the scrape-odds
-// GitHub Action. Falls back to the inline MARKET_ODDS_2026 if absent.
 async function loadMarketSnapshot() {
   try {
     const resp = await fetch("./data/market-snapshot.json", { cache: "no-store" });
@@ -29,10 +28,46 @@ async function loadMarketSnapshot() {
   }
 }
 
+async function loadSchedule() {
+  try {
+    const resp = await fetch("./data/schedule-2026.json", { cache: "no-store" });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    return data.SCHEDULE_2026 || data;
+  } catch {
+    return null;
+  }
+}
+
+async function loadTitleHistory() {
+  try {
+    const resp = await fetch("./data/title-history.json", { cache: "no-store" });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+// Power-method bias correction p_i^γ / Σ p_j^γ.
+function powerTransform(probs, gamma) {
+  if (!gamma || gamma === 1) return probs;
+  const out = {};
+  let total = 0;
+  for (const [k, v] of Object.entries(probs)) {
+    const t = Math.pow(Math.max(0, v), gamma);
+    out[k] = t;
+    total += t;
+  }
+  if (total === 0) return probs;
+  for (const k of Object.keys(out)) out[k] /= total;
+  return out;
+}
+
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => [...document.querySelectorAll(sel)];
 
-const ITERATIONS = 10000;
+const ITERATIONS = 25000;
 
 const state = {
   locale: "en",
@@ -43,11 +78,16 @@ const state = {
   squadDelta: null,
   blendedTitle: null,
   showAll: false,
+  schedule: null,
+  covariateProvider: null,
+  titleHistory: null,
+  marketGamma: 1.0,
   options: {
     useHost: true,
     useSquad: true,
     useDC: true,
     useMarket: true,
+    useCovariates: true,
   },
 };
 
@@ -334,27 +374,57 @@ function teamNameEN(name) {
 
 /* ─────────── Calibration chart (SVG) ─────────── */
 
+function wilson(p, n) {
+  if (n === 0) return [0, 1];
+  const z = 1.96;
+  const denom = 1 + z * z / n;
+  const center = (p + z * z / (2 * n)) / denom;
+  const half = z * Math.sqrt((p * (1 - p) + z * z / (4 * n)) / n) / denom;
+  return [Math.max(0, center - half), Math.min(1, center + half)];
+}
+
+const logit = (p) => Math.log(Math.max(1e-6, Math.min(1 - 1e-6, p)) / (1 - Math.max(1e-6, Math.min(1 - 1e-6, p))));
+
+function fitCalibrationLine(cells) {
+  const filtered = cells.filter((c) => c.observed !== null && c.n > 0);
+  if (filtered.length < 2) return { a: 0, b: 1 };
+  const xs = filtered.map((c) => logit(c.midPred));
+  const ys = filtered.map((c) => logit(c.observed));
+  const mx = xs.reduce((s, v) => s + v, 0) / xs.length;
+  const my = ys.reduce((s, v) => s + v, 0) / ys.length;
+  let num = 0, den = 0;
+  for (let i = 0; i < xs.length; i++) {
+    num += (xs[i] - mx) * (ys[i] - my);
+    den += (xs[i] - mx) ** 2;
+  }
+  const b = den === 0 ? 1 : num / den;
+  const a = my - b * mx;
+  return { a, b };
+}
+
 function renderCalibration() {
   const cells = state.calibration;
-  const w = 320, h = 200, m = 20;
+  const w = 320, h = 200, m = 22;
   const x = (v) => m + v * (w - 2 * m);
   const y = (v) => h - m - v * (h - 2 * m);
-  const path = cells
-    .filter((c) => c.observed !== null)
-    .map((c, i) => `${i === 0 ? "M" : "L"}${x(c.midPred)},${y(c.observed)}`)
-    .join(" ");
-  const dots = cells
-    .filter((c) => c.observed !== null)
-    .map((c) => `<circle cx="${x(c.midPred)}" cy="${y(c.observed)}" r="${Math.min(6, 2 + c.n / 25)}" fill="var(--accent)" opacity="0.8" />`)
-    .join("");
+  const valid = cells.filter((c) => c.observed !== null && c.n > 0);
+  const fit = fitCalibrationLine(cells);
+  const bars = valid.map((c) => {
+    const [lo, hi] = wilson(c.observed, c.n);
+    return `<line x1="${x(c.midPred)}" y1="${y(lo)}" x2="${x(c.midPred)}" y2="${y(hi)}" stroke="rgba(0,217,126,0.4)" stroke-width="1.5" />`;
+  }).join("");
+  const dots = valid.map((c) =>
+    `<circle cx="${x(c.midPred)}" cy="${y(c.observed)}" r="${Math.min(6, 2 + c.n / 25)}" fill="var(--accent)" opacity="0.9" />`
+  ).join("");
   $("#calibration").innerHTML = `
     <svg viewBox="0 0 ${w} ${h}" class="calibration-chart" aria-label="Calibration chart">
       <line x1="${x(0)}" y1="${y(0)}" x2="${x(1)}" y2="${y(1)}" stroke="rgba(127,168,150,0.4)" stroke-dasharray="4 3" />
-      <path d="${path}" stroke="var(--accent-2)" fill="none" stroke-width="2" />
+      ${bars}
       ${dots}
       <text x="${m}" y="${h - 4}" font-size="10" fill="var(--muted)">predicted →</text>
       <text x="${m + 4}" y="${m}" font-size="10" fill="var(--muted)">observed ↑</text>
     </svg>
+    <p class="muted small">logit(observed) = <strong>${fit.a.toFixed(2)}</strong> + <strong>${fit.b.toFixed(2)}</strong> · logit(predicted) — ideal is (0, 1). Wilson 95% intervals shown.</p>
   `;
 }
 
@@ -417,6 +487,54 @@ function setupScenarios() {
       $("#dashboard").classList.remove("recomputing");
     });
   });
+  const gammaSel = $("#market-gamma");
+  if (gammaSel) {
+    gammaSel.value = String(state.marketGamma);
+    gammaSel.addEventListener("change", async () => {
+      state.marketGamma = parseFloat(gammaSel.value);
+      const raw = state.marketSnapshot?.aggregated || MARKET_ODDS_2026;
+      state.marketProbs = powerTransform(raw, state.marketGamma);
+      $("#dashboard").classList.add("recomputing");
+      await new Promise((r) => requestAnimationFrame(r));
+      recompute();
+      renderAll();
+      $("#dashboard").classList.remove("recomputing");
+    });
+  }
+}
+
+function renderHistoryFanChart() {
+  if (!state.titleHistory || !Array.isArray(state.titleHistory) || state.titleHistory.length === 0) {
+    $("#history-card").hidden = true;
+    return;
+  }
+  $("#history-card").hidden = false;
+  const points = state.titleHistory;
+  const topCodes = Object.entries(state.blendedTitle || state.mc.titleProbability)
+    .sort((a, b) => b[1] - a[1]).slice(0, 6).map(([c]) => c);
+  const w = 720, h = 240, m = 30;
+  const dates = points.map((p) => new Date(p.date).getTime());
+  const xMin = Math.min(...dates), xMax = Math.max(...dates);
+  const ys = points.flatMap((p) => topCodes.map((c) => p.titles?.[c] || 0));
+  const yMax = Math.max(0.01, ...ys, 0.25);
+  const x = (d) => xMax === xMin ? w / 2 : m + (d - xMin) / (xMax - xMin) * (w - 2 * m);
+  const y = (v) => h - m - (v / yMax) * (h - 2 * m);
+  const colors = ["#00d97e", "#ffd166", "#ef476f", "#7fa896", "#9b87f5", "#f59e0b"];
+  const series = topCodes.map((code, i) => {
+    const path = points.map((p, idx) => `${idx === 0 ? "M" : "L"}${x(new Date(p.date).getTime())},${y(p.titles?.[code] || 0)}`).join(" ");
+    return `<g><path d="${path}" stroke="${colors[i]}" fill="none" stroke-width="2" opacity="0.85"/>
+       <text x="${w - m + 4}" y="${y(points[points.length - 1].titles?.[code] || 0) + 4}" font-size="10" fill="${colors[i]}">${escape(teamName(code))}</text></g>`;
+  }).join("");
+  $("#title-history").innerHTML = `
+    <svg viewBox="0 0 ${w + 60} ${h}" class="history-chart" aria-label="Title history">
+      <line x1="${m}" y1="${h - m}" x2="${w - m}" y2="${h - m}" stroke="rgba(127,168,150,0.3)"/>
+      <line x1="${m}" y1="${m}" x2="${m}" y2="${h - m}" stroke="rgba(127,168,150,0.3)"/>
+      ${series}
+      <text x="${m}" y="${h - 6}" font-size="10" fill="var(--muted)">${escape(new Date(xMin).toISOString().slice(0, 10))}</text>
+      <text x="${w - m - 60}" y="${h - 6}" font-size="10" fill="var(--muted)">${escape(new Date(xMax).toISOString().slice(0, 10))}</text>
+      <text x="${m - 22}" y="${m + 10}" font-size="10" fill="var(--muted)">${(yMax * 100).toFixed(0)}%</text>
+    </svg>
+  `;
 }
 
 /* ─────────── Compute pipeline ─────────── */
@@ -427,11 +545,13 @@ function recompute() {
     {
       squadDelta: state.squadDelta,
       dcParams: state.dcParams,
+      covariateProvider: state.covariateProvider,
       weights: DEFAULT_WEIGHTS,
       useHost: state.options.useHost,
       useSquad: state.options.useSquad,
       useDC: state.options.useDC,
       useMarket: state.options.useMarket,
+      useCovariates: state.options.useCovariates,
     },
     ITERATIONS,
   );
@@ -484,13 +604,12 @@ function buildCombinedTournaments() {
 
 async function bootstrap() {
   const combined = buildCombinedTournaments();
-  // Try to refresh market odds from the scraped snapshot.
   state.marketSnapshot = await loadMarketSnapshot();
-  if (state.marketSnapshot?.aggregated) {
-    state.marketProbs = state.marketSnapshot.aggregated;
-  } else {
-    state.marketProbs = MARKET_ODDS_2026;
-  }
+  const rawMarket = state.marketSnapshot?.aggregated || MARKET_ODDS_2026;
+  state.marketProbs = powerTransform(rawMarket, state.marketGamma);
+  state.schedule = await loadSchedule();
+  state.covariateProvider = state.schedule ? buildCovariateProvider(state.schedule) : null;
+  state.titleHistory = await loadTitleHistory();
   // 1. Fit DC on ALL historical matches (group + KO across all years).
   state.dcParams = fitDCOnHistorical(HISTORICAL_KNOCKOUTS, HISTORICAL_ELO, NEW_HISTORICAL_MATCHES);
   // 2. Squad-strength deltas.
@@ -511,6 +630,7 @@ function renderAll() {
   renderGroups();
   renderBacktest();
   renderCalibration();
+  renderHistoryFanChart();
   renderContext();
   renderMethodology();
   fireConfetti();

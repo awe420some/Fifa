@@ -13,6 +13,7 @@ import {
 } from "./models/elo.js";
 import {
   fitDixonColes,
+  bootstrapDC,
   dcMatchOutcome,
   dcInitFromElo,
 } from "./models/dixonColes.js";
@@ -26,6 +27,49 @@ import {
   DEFAULT_WEIGHTS,
   fitWeights,
 } from "./models/ensemble.js";
+import { outcomeProbsFromPoisson } from "./models/elo.js";
+import { teamCovariateOffset } from "./models/covariates.js";
+
+// Build a lookup `(groupLetter, teamA.code, teamB.code) → { venueId, restA, restB }`
+// from the official fixture list. Used to apply travel/timezone/rest/climate
+// covariates inside the group stage simulation.
+export function buildCovariateProvider(schedule, opts = {}) {
+  if (!Array.isArray(schedule)) return null;
+  const venue = new Map();
+  const dates = {};       // teamCode → sorted match dates
+  for (const m of schedule) {
+    if (m.stage !== "group" || !m.group) continue;
+    const k = `${m.group}|${[m.teamA, m.teamB].sort().join("|")}`;
+    venue.set(k, m.venueId);
+    (dates[m.teamA] ??= []).push(m.date);
+    (dates[m.teamB] ??= []).push(m.date);
+  }
+  for (const code of Object.keys(dates)) dates[code].sort();
+  const restDaysBefore = (code, date) => {
+    const d = dates[code];
+    if (!d || d.length === 0) return 4;
+    const idx = d.indexOf(date);
+    if (idx <= 0) return 4;
+    const cur = new Date(d[idx]).getTime();
+    const prev = new Date(d[idx - 1]).getTime();
+    return Math.max(2, Math.round((cur - prev) / 86400000));
+  };
+  return (teamACode, teamBCode, group) => {
+    const k = `${group}|${[teamACode, teamBCode].sort().join("|")}`;
+    const venueId = venue.get(k);
+    if (!venueId) return null;
+    const fixtureDate = schedule.find(
+      (m) => m.group === group && new Set([m.teamA, m.teamB]).has(teamACode) && new Set([m.teamA, m.teamB]).has(teamBCode),
+    )?.date;
+    const restA = fixtureDate ? restDaysBefore(teamACode, fixtureDate) : 4;
+    const restB = fixtureDate ? restDaysBefore(teamBCode, fixtureDate) : 4;
+    return {
+      venueId,
+      a: teamCovariateOffset(teamACode, teamBCode, venueId, restA, restB, opts.coefs),
+      b: teamCovariateOffset(teamBCode, teamACode, venueId, restB, restA, opts.coefs),
+    };
+  };
+}
 
 const KO_ROUND_NAMES = ["R32", "R16", "QF", "SF", "Final"];
 const ROUND_ROBIN_PAIRS = [[0, 1], [2, 3], [0, 2], [1, 3], [0, 3], [1, 2]];
@@ -60,6 +104,8 @@ function hostBonusFor(team, hostCodes, useHost) {
 }
 
 // Compute Elo + DC outcome probabilities and the blended ensemble.
+// Optional ctx.covariateOffsets (function(codeA, codeB, group?) → {a, b, venueId})
+// adds a per-team additive shift to log-λ for both Elo and DC paths.
 export function matchProbs(teamA, teamB, ctx) {
   const eA = effectiveElo(teamA, ctx.eloMap, ctx.squadDelta, ctx.options);
   const eB = effectiveElo(teamB, ctx.eloMap, ctx.squadDelta, ctx.options);
@@ -67,9 +113,24 @@ export function matchProbs(teamA, teamB, ctx) {
   const hB = hostBonusFor(teamB, ctx.hostCodes, ctx.options.useHost);
   const homeAdv = hA - hB;
 
-  const eloP = eloOutcomeProbs(eA, eB, homeAdv);
+  let eloP = eloOutcomeProbs(eA, eB, homeAdv);
   const hostFlag = (hA > 0 ? 1 : 0) - (hB > 0 ? 1 : 0);
-  const dcP = dcOutcomeWithFallback(teamA.code, teamB.code, ctx.dcParams, hostFlag, eA, eB);
+  let dcP = dcOutcomeWithFallback(teamA.code, teamB.code, ctx.dcParams, hostFlag, eA, eB);
+
+  // Covariate hook — adjust both base λs in lock-step and recompute outcome
+  // probs. Only used in the 2026 forward MC where the venue/schedule is known.
+  let covInfo = null;
+  if (ctx.options.useCovariates && ctx.covariateProvider && ctx.currentGroup) {
+    covInfo = ctx.covariateProvider(teamA.code, teamB.code, ctx.currentGroup);
+    if (covInfo) {
+      const eA2 = expectedGoals(eA, eB, homeAdv) * Math.exp(covInfo.a);
+      const eB2 = expectedGoals(eB, eA, -homeAdv) * Math.exp(covInfo.b);
+      eloP = outcomeProbsFromPoisson(eA2, eB2);
+      const lH2 = dcP.lambdaH * Math.exp(covInfo.a);
+      const lA2 = dcP.lambdaA * Math.exp(covInfo.b);
+      dcP = { ...outcomeProbsFromPoisson(lH2, lA2), lambdaH: lH2, lambdaA: lA2 };
+    }
+  }
 
   // Blend at match level. Market is title-level, not per-match.
   const w = ctx.weights || DEFAULT_WEIGHTS;
@@ -123,19 +184,30 @@ function sampleMatch(teamA, teamB, ctx, rng) {
   return { scoreA, scoreB, probs, outcome };
 }
 
+// Knockout — 90 min → 30 min ET (κ-scaled) → Elo-damped shootout.
+// κ = 0.95 captures the empirical observation that ET is slightly
+// more conservative than open play (Karlis–Ntzoufras 2003); the /3
+// reflects ET length being 30/90 of regulation.
+const ET_KAPPA = 0.95;
 function knockoutResult(teamA, teamB, ctx, rng) {
   const result = sampleMatch(teamA, teamB, ctx, rng);
-  if (result.scoreA !== result.scoreB) {
-    return { winner: result.scoreA > result.scoreB ? teamA : teamB, ...result, penalty: false };
+  let { scoreA, scoreB } = result;
+  if (scoreA !== scoreB) {
+    return { winner: scoreA > scoreB ? teamA : teamB, scoreA, scoreB, probs: result.probs, et: false, penalty: false };
   }
-  // Penalty shootout — dampened toward 50/50.
+  const etScale = ET_KAPPA / 3;
+  scoreA += poissonSample(result.probs.lambdaH * etScale, rng);
+  scoreB += poissonSample(result.probs.lambdaA * etScale, rng);
+  if (scoreA !== scoreB) {
+    return { winner: scoreA > scoreB ? teamA : teamB, scoreA, scoreB, probs: result.probs, et: true, penalty: false };
+  }
   const eA = effectiveElo(teamA, ctx.eloMap, ctx.squadDelta, ctx.options);
   const eB = effectiveElo(teamB, ctx.eloMap, ctx.squadDelta, ctx.options);
   const pAelo = winProbability(eA, eB);
   const pShootout = 0.5 + (pAelo - 0.5) * ELO_CONFIG.shootoutDamp;
   return {
     winner: rng() < pShootout ? teamA : teamB,
-    ...result, penalty: true,
+    scoreA, scoreB, probs: result.probs, et: true, penalty: true,
   };
 }
 
@@ -153,7 +225,9 @@ function simulateGroupStage(teams, groups, ctx, rng) {
     for (const [ai, bi] of ROUND_ROBIN_PAIRS) {
       const a = groupTeams[ai];
       const b = groupTeams[bi];
+      ctx.currentGroup = letter;
       const { scoreA, scoreB } = sampleMatch(a, b, ctx, rng);
+      ctx.currentGroup = null;
       stats[a.code].gf += scoreA; stats[a.code].ga += scoreB;
       stats[b.code].gf += scoreB; stats[b.code].ga += scoreA;
       if (scoreA > scoreB) { stats[a.code].p += 3; stats[a.code].w++; stats[b.code].l++; }
@@ -241,12 +315,14 @@ export function runEnsembleMonteCarlo(teams, groups, hostCodes, eloMap, options 
     hostCodes,
     squadDelta: options.squadDelta || null,
     dcParams: options.dcParams || null,
+    covariateProvider: options.covariateProvider || null,
     weights: options.weights || DEFAULT_WEIGHTS,
     options: {
       useHost: options.useHost !== false,
       useSquad: options.useSquad !== false,
       useDC: options.useDC !== false,
       useMarket: options.useMarket !== false,
+      useCovariates: options.useCovariates !== false,
     },
   };
   // If DC isn't desired in this scenario, set its weight to 0.
@@ -317,7 +393,7 @@ export function flattenHistoricalMatches(historicalKnockouts, newMatchesByYear) 
       year,
       teamA: m.teamA, teamB: m.teamB,
       scoreA: m.scoreA, scoreB: m.scoreB,
-      weight: Math.exp(-(2026 - year) * 0.06),
+      weight: Math.exp(-(2026 - year) * DC_DECAY),
     });
     codes.add(m.teamA); codes.add(m.teamB);
   };
@@ -329,6 +405,12 @@ export function flattenHistoricalMatches(historicalKnockouts, newMatchesByYear) 
   }
   return { matches, teamCodes: [...codes] };
 }
+
+// 4-year half-life: 2022 matches weigh ~1.7× the 2014 matches, ~2× the
+// 2010 matches, ~3× the 2006 matches, ~6× the 1994 matches. Matches the
+// medium-scale recommendation from Report 2 for WM-only data slices.
+const DC_HALF_LIFE_YEARS = 4;
+const DC_DECAY = Math.LN2 / DC_HALF_LIFE_YEARS;
 
 export function fitDCOnHistorical(historicalKnockouts, historicalElo, newMatchesByYear) {
   const { matches, teamCodes } = flattenHistoricalMatches(historicalKnockouts, newMatchesByYear);
