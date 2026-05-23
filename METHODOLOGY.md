@@ -267,7 +267,33 @@ with κ = 0.95 (mildly more conservative than open play). If still tied
 after ET, the Elo-damped shootout (P_shootout = 0.5 + 0.4 · (P_Elo − 0.5))
 breaks the tie.
 
-## 5d. Bootstrap parameter uncertainty
+## 5d. Standard deviation columns
+
+The stage-by-stage table shows two SD columns per team:
+
+- **SD** — Monte-Carlo sampling SD, `√(p̂·(1−p̂) / N)` with `N = 25 000`.
+  Always shown. Captures only the variance from finite simulation runs
+  *given* a fixed Dixon-Coles fit.
+- **Total SD** — only filled when the "Parameter-Unsicherheit
+  (Bootstrap)" toggle is on. Equals `√(MC_var + Bootstrap_var)` where
+  `Bootstrap_var` is the empirical variance of title probabilities
+  across `B = 10` Dixon-Coles fits drawn from with-replacement
+  resamples of the 372-match history (`bootstrapDC` helper).
+
+This implements the standard variance decomposition
+
+```
+Var(p̂) = E_θ[Var(p̂ | θ)]   ← MC sampling component
+       + Var_θ(E[p̂ | θ])    ← parameter-fit component
+```
+
+Production-grade reporting (academic settings) would use `B = 100`
+and `N = 50 000` per fit; we cap at `B = 10 × N = 5 000` to keep the
+opt-in recompute under ~20 s in the browser. Total SD is typically
+3–8× the MC-only SD because the dataset is small (372 matches across
+7 World Cups).
+
+## 5e. Bootstrap parameter uncertainty
 
 `bootstrapDC(matches, codes, elo, B)` returns B independent
 Dixon-Coles fits on with-replacement resamples of the 372-match

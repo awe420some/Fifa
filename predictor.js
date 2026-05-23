@@ -379,7 +379,59 @@ export function runEnsembleMonteCarlo(teams, groups, hostCodes, eloMap, options 
   };
 }
 
-/* ─────────── DC fitting from historical matches ─────────── */
+/* ─────────── Bootstrap-MC for parameter uncertainty ─────────── */
+
+// Re-runs the full ensemble Monte-Carlo B times, each with a different
+// Dixon-Coles fit drawn from `bootstrapDC`. Returns per-team title prob
+// (mean across bootstraps) plus the bootstrap-variance contribution.
+// Stage probabilities (R32/R16/QF/SF/finals) come from the FIRST fit so
+// they remain readable; only the title distribution carries the
+// parameter-uncertainty signal that's interesting for SD purposes.
+export function runEnsembleMonteCarloBootstrap(teams, groups, hostCodes, eloMap, options, dcFits, iterationsPerFit = 5000) {
+  if (!Array.isArray(dcFits) || dcFits.length === 0) {
+    throw new Error("runEnsembleMonteCarloBootstrap: dcFits must be a non-empty array");
+  }
+  const titlePerFit = dcFits.map((fit) => {
+    const res = runEnsembleMonteCarlo(
+      teams, groups, hostCodes, eloMap,
+      { ...options, dcParams: fit },
+      iterationsPerFit,
+    );
+    return res;
+  });
+  // First fit gives the canonical stage distribution we display.
+  const base = titlePerFit[0];
+  const codes = Object.keys(base.titleProbability);
+  const meanTitle = {};
+  const bootstrapVar = {};
+  const mcVar = {};
+  for (const c of codes) {
+    const vals = titlePerFit.map((r) => r.titleProbability[c] || 0);
+    const m = vals.reduce((s, v) => s + v, 0) / vals.length;
+    meanTitle[c] = m;
+    // Sample variance across bootstraps.
+    if (vals.length > 1) {
+      let v = 0;
+      for (const x of vals) v += (x - m) ** 2;
+      bootstrapVar[c] = v / (vals.length - 1);
+    } else {
+      bootstrapVar[c] = 0;
+    }
+    // Mean MC sampling variance across fits.
+    let mv = 0;
+    for (const x of vals) mv += x * (1 - x) / iterationsPerFit;
+    mcVar[c] = mv / vals.length;
+  }
+  return {
+    ...base,
+    titleProbability: meanTitle,
+    bootstrapVar,
+    mcVar,
+    B: dcFits.length,
+    iterationsPerFit,
+    iterations: dcFits.length * iterationsPerFit,
+  };
+}
 
 // Builds the match list expected by fitDixonColes from BOTH the
 // HISTORICAL_KNOCKOUTS records (knockout matches) and the bulk

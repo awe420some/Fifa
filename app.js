@@ -7,10 +7,11 @@ import {
   STATS, NAMES_DE, I18N, DATA_SOURCES,
 } from "./data.js";
 import {
-  runEnsembleMonteCarlo, matchProbs,
+  runEnsembleMonteCarlo, runEnsembleMonteCarloBootstrap, matchProbs,
   fitDCOnHistorical, runRPSBacktest, calibrationBins,
-  blendWithMarket,
+  blendWithMarket, flattenHistoricalMatches,
 } from "./predictor.js";
+import { bootstrapDC } from "./models/dixonColes.js";
 import { squadEloAdjustments } from "./models/squad.js";
 import { DEFAULT_WEIGHTS } from "./models/ensemble.js";
 import { aggregateMarket, deVig } from "./models/market.js";
@@ -82,6 +83,8 @@ const state = {
   covariateProvider: null,
   titleHistory: null,
   marketGamma: 1.0,
+  bootstrap: false,
+  bootstrapFits: null,
   options: {
     useHost: true,
     useSquad: true,
@@ -178,12 +181,18 @@ function renderStages() {
   const dict = t();
   const cols = dict.stageCols;
   const market = state.marketProbs || MARKET_ODDS_2026;
+  const hasBootstrap = state.bootstrap && state.mc.bootstrapVar;
   const teams = TEAMS_2026.map((team) => {
     const code = team.code;
     const tp = (state.blendedTitle || state.mc.titleProbability)[code] || 0;
-    const se = Math.sqrt(Math.max(0, tp * (1 - tp)) / state.mc.iterations);
-    const ciLow = Math.max(0, tp - 1.96 * se);
-    const ciHigh = Math.min(1, tp + 1.96 * se);
+    // Monte-Carlo sampling SD.
+    const mcSE = Math.sqrt(Math.max(0, tp * (1 - tp)) / state.mc.iterations);
+    // Total SD = sqrt(MC variance + bootstrap variance), when bootstrap is on.
+    const bsVar = hasBootstrap ? (state.mc.bootstrapVar[code] || 0) : 0;
+    const totalSD = hasBootstrap ? Math.sqrt(mcSE * mcSE + bsVar) : null;
+    const ciHalfWidth = totalSD ?? mcSE;
+    const ciLow = Math.max(0, tp - 1.96 * ciHalfWidth);
+    const ciHigh = Math.min(1, tp + 1.96 * ciHalfWidth);
     const surprise = tp > 0 ? -Math.log2(tp) : Infinity;
     return {
       code, tp,
@@ -193,6 +202,8 @@ function renderStages() {
       qf: state.mc.quartersProbability[code] || 0,
       sf: state.mc.semisProbability[code] || 0,
       finalP: state.mc.finalsProbability[code] || 0,
+      sd: mcSE,
+      totalSD,
       surprise, ciLow, ciHigh,
     };
   })
@@ -208,6 +219,8 @@ function renderStages() {
       <td class="num">${pct(r.sf, 0)}</td>
       <td class="num">${pct(r.finalP, 1)}</td>
       <td class="num accent">${pct(r.tp, 2)}</td>
+      <td class="num small">${pct(r.sd, 2)}</td>
+      <td class="num small">${r.totalSD == null ? "—" : pct(r.totalSD, 2)}</td>
       <td class="num small">[${pct(r.ciLow, 1)}, ${pct(r.ciHigh, 1)}]</td>
       <td class="num">${r.surprise === Infinity ? "—" : r.surprise.toFixed(1)}</td>
     </tr>
@@ -223,6 +236,8 @@ function renderStages() {
         <th>${escape(cols.sf)}</th>
         <th>${escape(cols.final)}</th>
         <th>${escape(cols.title)}</th>
+        <th>${escape(cols.sd)}</th>
+        <th>${escape(cols.totalSd)}</th>
         <th>${escape(cols.ci)}</th>
         <th>${escape(cols.surprise)}</th>
       </tr></thead>
@@ -487,6 +502,38 @@ function setupScenarios() {
       $("#dashboard").classList.remove("recomputing");
     });
   });
+  const bootstrapToggle = $("#bootstrap-toggle");
+  if (bootstrapToggle) {
+    bootstrapToggle.checked = state.bootstrap;
+    bootstrapToggle.addEventListener("change", async () => {
+      state.bootstrap = bootstrapToggle.checked;
+      $("#dashboard").classList.add("recomputing");
+      if (state.bootstrap && !state.bootstrapFits) {
+        // Lazy-fit B=10 DC parameter sets — chunked so the UI doesn't
+        // freeze. Each fit is a synchronous ~1.5 s job; we yield to
+        // the event loop between fits.
+        const { matches, teamCodes } = flattenHistoricalMatches(HISTORICAL_KNOCKOUTS, NEW_HISTORICAL_MATCHES);
+        const eloMap = {};
+        for (const y of Object.keys(HISTORICAL_ELO).map(Number).sort((a, b) => b - a)) {
+          for (const [code, elo] of Object.entries(HISTORICAL_ELO[y])) {
+            if (eloMap[code] === undefined) eloMap[code] = elo;
+          }
+        }
+        const B = 10;
+        state.bootstrapFits = [];
+        for (let i = 0; i < B; i++) {
+          await new Promise((r) => setTimeout(r, 0));
+          const sample = new Array(matches.length);
+          for (let j = 0; j < matches.length; j++) sample[j] = matches[Math.floor(Math.random() * matches.length)];
+          state.bootstrapFits.push(bootstrapDC(sample, teamCodes, eloMap, 1, { iterations: 40 })[0]);
+        }
+      }
+      await new Promise((r) => requestAnimationFrame(r));
+      recompute();
+      renderAll();
+      $("#dashboard").classList.remove("recomputing");
+    });
+  }
   const gammaSel = $("#market-gamma");
   if (gammaSel) {
     gammaSel.value = String(state.marketGamma);
@@ -540,21 +587,31 @@ function renderHistoryFanChart() {
 /* ─────────── Compute pipeline ─────────── */
 
 function recompute() {
-  state.mc = runEnsembleMonteCarlo(
-    TEAMS_2026, GROUPS_2026, hostCodes, ELO_2026,
-    {
-      squadDelta: state.squadDelta,
-      dcParams: state.dcParams,
-      covariateProvider: state.covariateProvider,
-      weights: DEFAULT_WEIGHTS,
-      useHost: state.options.useHost,
-      useSquad: state.options.useSquad,
-      useDC: state.options.useDC,
-      useMarket: state.options.useMarket,
-      useCovariates: state.options.useCovariates,
-    },
-    ITERATIONS,
-  );
+  const baseOpts = {
+    squadDelta: state.squadDelta,
+    dcParams: state.dcParams,
+    covariateProvider: state.covariateProvider,
+    weights: DEFAULT_WEIGHTS,
+    useHost: state.options.useHost,
+    useSquad: state.options.useSquad,
+    useDC: state.options.useDC,
+    useMarket: state.options.useMarket,
+    useCovariates: state.options.useCovariates,
+  };
+  if (state.bootstrap && state.bootstrapFits) {
+    state.mc = runEnsembleMonteCarloBootstrap(
+      TEAMS_2026, GROUPS_2026, hostCodes, ELO_2026,
+      baseOpts,
+      state.bootstrapFits,
+      5000,
+    );
+  } else {
+    state.mc = runEnsembleMonteCarlo(
+      TEAMS_2026, GROUPS_2026, hostCodes, ELO_2026,
+      baseOpts,
+      ITERATIONS,
+    );
+  }
   if (state.options.useMarket) {
     state.blendedTitle = blendWithMarket(state.mc.titleProbability, state.marketProbs || MARKET_ODDS_2026, DEFAULT_WEIGHTS.market);
   } else {
