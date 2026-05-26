@@ -388,6 +388,103 @@ top-scorer projections — even though they will still affect the team's
 expected-goal generation indirectly via Elo / Dixon-Coles. The model
 chooses honesty over completeness here.
 
+## 5g. Card / discipline model
+
+Per match per team we draw a Poisson count for yellow cards
+$Y \sim \mathrm{Poisson}(2.05)$ and a Poisson count for red cards
+$R \sim \mathrm{Poisson}(0.08)$, then attribute each card to a player
+via a positional multinomial. The position priors come from FIFA
+Technical Reports 2010–2022 + Premier League season-aggregate
+position breakdown:
+
+| Position | P(yellow) | P(red) |
+|---|---:|---:|
+| GK  | 0.05 | 0.05 |
+| DEF | 0.30 | 0.40 |
+| MID | 0.45 | 0.35 |
+| FW  | 0.20 | 0.20 |
+
+Per player
+
+$$
+\pi_i^{\text{card}} = \frac{\text{posWeight}_i \cdot s_i}
+                          {\sum_j \text{posWeight}_j \cdot s_j}
+$$
+
+The MC aggregates **E[Y]**, **E[R]** and **P(suspended at risk)** — the
+last is the fraction of iterations where the player picked up either
+≥ 2 yellows or ≥ 1 red anywhere in the tournament (proxy for the
+FIFA "2 Y → next-match ban" rule; the actual ban-dynamic is not
+simulated in the bracket).
+
+Honest scope note: card rates are positional, not per-player history.
+Casemiro / Rodri-archetypes (defensive midfielders) thus dominate the
+ranking — this is correct in expectation but doesn't capture
+individual aggressiveness (Calhanoglu vs Rodri, both DM but different
+profiles).
+
+## 5h. Player-prop comparison (Modell vs Markt)
+
+For each Big-5-stat player we compare two model probabilities against
+the de-vigged aggregate of DraftKings + Polymarket player-prop quotes:
+
+- **Top scorer**: model P(Golden Boot) vs market top-scorer odds.
+- **Anytime scorer (in WC)**: model P(scores ≥ 1 in tournament) vs
+  market anytime-scorer odds.
+
+The de-vigging logic is unchanged from §2.4 — it operates on
+player-name keys instead of team-code keys via the
+`aggregatePlayerMarket(playerData)` wrapper in `models/market.js`.
+
+The displayed **Diff = Modell − Markt** column highlights:
+
+- `+` percentage point → model thinks the player is more likely than
+  the market does (potential **value pick** if your model is calibrated
+  correctly).
+- `−` percentage point → market is more bullish (the bookies see
+  something the model misses; usually injury status, form, or coaches'
+  selection signals).
+
+Honest scope note: the data is a manually-curated snapshot for ~30
+top-scorer candidates (May 2026). FanDuel / Pinnacle / Bet365 / Bet365
+are geo- or bot-blocked from this runtime, so only DraftKings +
+Polymarket contribute. Players outside the snapshot's top-30 show
+"n/v" in the market column; the model still produces a probability for
+them, just without a market comparison.
+
+For non-Big-5-league stars (Messi MLS, Ronaldo Saudi PL, Neymar
+Brasileirão) the model side is also `n/v` — `npxG90` is unavailable
+outside the Big-5. The market side may still carry a quote (the books
+do list them), but no diff is computed.
+
+## 5i. Team-Market Matrix
+
+The bookmaker odds page is extended from "title winner only" to a full
+seven-stage market matrix per team: Title, Finals, Semis, QF, R16,
+Group Winner, Group Top-2. The model side reads directly from
+`state.mc.{title,finals,semis,quarters,r16,groupAdvance,groupPosition}Probability`
+maps (the MC already produces these per team).
+
+The market side reads from the extended `data/market-snapshot.json`
+schema:
+
+```json
+{
+  "asOf": "...",
+  "titleAggregated": { CODE: prob, ... },
+  "finalsAggregated": { CODE: prob, ... },
+  "semisAggregated":  { CODE: prob, ... },
+  ...
+  "groupWinnerAggregated": { CODE: prob, ... },
+  "topTwoAggregated":      { CODE: prob, ... }
+}
+```
+
+When a stage's `*Aggregated` map is missing or empty (the typical
+case for stages other than Title, since most books don't post those
+markets until ~6 weeks before the tournament), the column displays
+`n/v`. The matrix is sortable by any stage's diff; click the header.
+
 ## 6. Counterfactuals & a DiD case study (host effect 2010 RSA)
 
 We don't run DiD or Synthetic Control in the dashboard MC pipeline —

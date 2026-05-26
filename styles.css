@@ -390,3 +390,23 @@ footer.foot {
 @media (max-width: 720px) {
   .minute-grid { grid-template-columns: repeat(4, 1fr); }
 }
+
+/* ─────────── Player-prop & team-market tables ─────────── */
+.edge-up { color: var(--accent-2, #00d97e); font-weight: 600; }
+.edge-down { color: #ef476f; }
+.team-matrix { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+.team-matrix th, .team-matrix td {
+  border: 1px solid rgba(127, 168, 150, 0.18);
+  padding: 4px 6px; text-align: center;
+}
+.team-matrix th { cursor: pointer; user-select: none; background: rgba(127, 168, 150, 0.06); }
+.team-matrix th.sorted-asc::after { content: " ↑"; color: var(--accent-2); }
+.team-matrix th.sorted-desc::after { content: " ↓"; color: var(--accent-2); }
+.team-matrix td.team-name { text-align: left; font-weight: 500; }
+.matrix-cell { display: grid; gap: 1px; font-variant-numeric: tabular-nums; }
+.matrix-cell .mc-model { font-weight: 600; }
+.matrix-cell .mc-market { color: var(--muted); font-size: 0.72rem; }
+.matrix-cell .mc-diff { font-size: 0.72rem; }
+@media (max-width: 720px) {
+  .team-matrix { font-size: 0.66rem; display: block; overflow-x: auto; }
+}

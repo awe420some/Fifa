@@ -144,6 +144,63 @@ export const CARDS_PER_MATCH = {
   red: 0.08,
 };
 
+// Position-weighted card allocation. Yellows skew toward MID/DEF
+// (tactical fouls + defensive duels); reds skew further toward DEF.
+// Empirical baseline from FIFA Technical Reports 2010–2022 + Premier
+// League season-aggregate position breakdown.
+const POS_YELLOW = { GK: 0.05, DEF: 0.30, MID: 0.45, FW: 0.20 };
+const POS_RED    = { GK: 0.05, DEF: 0.40, MID: 0.35, FW: 0.20 };
+
+// Build a per-team Multinomial for cards of a given colour
+// ("yellow" | "red"). Probabilities are
+//   π_i ∝ POS_COLOR[pos_i] × minShare_i
+// across all listed players; non-Big-5 status is irrelevant here
+// because card-rate priors are positional, not league-based.
+export function teamCardShares(teamCode, colour = "yellow") {
+  const roster = playersByTeam().get(teamCode) || [];
+  if (roster.length === 0) return null;
+  const table = colour === "red" ? POS_RED : POS_YELLOW;
+  const entries = [];
+  for (const p of roster) {
+    const w = table[p.pos] ?? 0.2;
+    const minShare = p.minShare ?? DEFAULT_MIN_SHARE[p.pos] ?? 0.5;
+    const score = w * minShare;
+    if (score > 0) entries.push({ name: p.name, score });
+  }
+  if (entries.length === 0) return null;
+  const total = entries.reduce((s, e) => s + e.score, 0);
+  return {
+    names: entries.map((e) => e.name),
+    probs: entries.map((e) => e.score / total),
+  };
+}
+
+// Pre-compute card shares for all teams.
+export function precomputeCardShares() {
+  const out = new Map();
+  for (const code of playersByTeam().keys()) {
+    out.set(code, {
+      yellow: teamCardShares(code, "yellow"),
+      red: teamCardShares(code, "red"),
+    });
+  }
+  return out;
+}
+
+// Sample a Poisson count for cards per team per match.
+export function sampleCardCount(lambda, rng) {
+  if (lambda <= 0) return 0;
+  // Knuth's algorithm — fine for small λ (we use λ ≤ 3).
+  const L = Math.exp(-lambda);
+  let k = 0;
+  let p = 1;
+  while (p > L) {
+    k++;
+    p *= rng();
+  }
+  return k - 1;
+}
+
 // Liga-strength factor applied if user later wants a back-of-envelope
 // extension to non-Big-5 npxG. Documented for transparency; not used in
 // the default path (where non-Big-5 = null/excluded).

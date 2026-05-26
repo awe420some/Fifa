@@ -31,8 +31,11 @@ import { outcomeProbsFromPoisson } from "./models/elo.js";
 import { teamCovariateOffset } from "./models/covariates.js";
 import {
   precomputeShares,
+  precomputeCardShares,
   sampleScorer,
   sampleMinuteBin,
+  sampleCardCount,
+  CARDS_PER_MATCH,
   GOAL_MINUTE_BINS,
 } from "./models/players.js";
 
@@ -190,7 +193,32 @@ function sampleMatch(teamA, teamB, ctx, rng) {
   const events = ctx.playerShares
     ? samplePlayerEvents(teamA.code, teamB.code, scoreA, scoreB, ctx, rng)
     : null;
+  if (events && ctx.cardShares) {
+    addPlayerCards(teamA.code, teamB.code, ctx, rng, events);
+  }
   return { scoreA, scoreB, probs, outcome, events };
+}
+
+// Mutates `events` with per-player yellow/red card draws for this match.
+// Uses Poisson(CARDS_PER_MATCH.yellow) per team and a Bernoulli for red
+// (red events are rare; Poisson with λ=0.08 ≈ Bernoulli at this rate).
+function addPlayerCards(codeA, codeB, ctx, rng, events) {
+  const sharesA = ctx.cardShares.get(codeA);
+  const sharesB = ctx.cardShares.get(codeB);
+  events.yellowsA = []; events.yellowsB = [];
+  events.redsA = []; events.redsB = [];
+  const yA = sampleCardCount(CARDS_PER_MATCH.yellow, rng);
+  const yB = sampleCardCount(CARDS_PER_MATCH.yellow, rng);
+  const rA = sampleCardCount(CARDS_PER_MATCH.red, rng);
+  const rB = sampleCardCount(CARDS_PER_MATCH.red, rng);
+  if (sharesA) {
+    for (let i = 0; i < yA; i++) events.yellowsA.push(sampleScorer(sharesA.yellow, rng));
+    for (let i = 0; i < rA; i++) events.redsA.push(sampleScorer(sharesA.red, rng));
+  }
+  if (sharesB) {
+    for (let i = 0; i < yB; i++) events.yellowsB.push(sampleScorer(sharesB.yellow, rng));
+    for (let i = 0; i < rB; i++) events.redsB.push(sampleScorer(sharesB.red, rng));
+  }
 }
 
 // Multinomial allocation of goals + assists + minute bins to players,
@@ -380,6 +408,7 @@ export function runEnsembleMonteCarlo(teams, groups, hostCodes, eloMap, options 
     covariateProvider: options.covariateProvider || null,
     weights: options.weights || DEFAULT_WEIGHTS,
     playerShares: options.trackPlayers ? precomputeShares() : null,
+    cardShares: options.trackPlayers ? precomputeCardShares() : null,
     options: {
       useHost: options.useHost !== false,
       useSquad: options.useSquad !== false,
@@ -405,6 +434,9 @@ export function runEnsembleMonteCarlo(teams, groups, hostCodes, eloMap, options 
   const playerMinutes = ctx.playerShares ? new Map() : null;
   const playerMatchesWithGoal = ctx.playerShares ? new Map() : null;
   const goldenBoot = ctx.playerShares ? new Map() : null;
+  const playerYellow = ctx.playerShares ? new Map() : null;
+  const playerRed = ctx.playerShares ? new Map() : null;
+  const playerSuspended = ctx.playerShares ? new Map() : null;
   let sampleRun = null;
 
   for (let i = 0; i < iterations; i++) {
@@ -431,7 +463,7 @@ export function runEnsembleMonteCarlo(teams, groups, hostCodes, eloMap, options 
       }
     }
     if (ctx.playerShares) {
-      aggregatePlayerEvents(r, { playerGoals, playerAssists, playerMinutes, playerMatchesWithGoal, goldenBoot });
+      aggregatePlayerEvents(r, { playerGoals, playerAssists, playerMinutes, playerMatchesWithGoal, goldenBoot, playerYellow, playerRed, playerSuspended });
     }
     if (i === 0) sampleRun = r;
   }
@@ -452,7 +484,9 @@ export function runEnsembleMonteCarlo(teams, groups, hostCodes, eloMap, options 
   if (ctx.playerShares) {
     result.players = summarizePlayers({
       playerGoals, playerAssists, playerMinutes,
-      playerMatchesWithGoal, goldenBoot, iterations,
+      playerMatchesWithGoal, goldenBoot,
+      playerYellow, playerRed, playerSuspended,
+      iterations,
     });
   }
   return result;
@@ -460,6 +494,8 @@ export function runEnsembleMonteCarlo(teams, groups, hostCodes, eloMap, options 
 
 function aggregatePlayerEvents(r, agg) {
   const perIterGoals = new Map();
+  const perIterYellow = new Map();
+  const perIterRed = new Map();
   const tally = (events) => {
     if (!events) return;
     for (const name of events.scorersA) if (name) bumpName(agg.playerGoals, name);
@@ -468,19 +504,37 @@ function aggregatePlayerEvents(r, agg) {
     for (const name of events.assistsB) if (name) bumpName(agg.playerAssists, name);
     for (const bin of events.minutesA) if (bin) bumpBin(agg.playerMinutes, bin.label);
     for (const bin of events.minutesB) if (bin) bumpBin(agg.playerMinutes, bin.label);
-    // Per-iteration tournament goal count (used for Golden Boot + the
-    // "scored at least once in this tournament" stat below).
     for (const name of events.scorersA) if (name) perIterGoals.set(name, (perIterGoals.get(name) || 0) + 1);
     for (const name of events.scorersB) if (name) perIterGoals.set(name, (perIterGoals.get(name) || 0) + 1);
+    for (const name of (events.yellowsA || [])) if (name) {
+      bumpName(agg.playerYellow, name);
+      perIterYellow.set(name, (perIterYellow.get(name) || 0) + 1);
+    }
+    for (const name of (events.yellowsB || [])) if (name) {
+      bumpName(agg.playerYellow, name);
+      perIterYellow.set(name, (perIterYellow.get(name) || 0) + 1);
+    }
+    for (const name of (events.redsA || [])) if (name) {
+      bumpName(agg.playerRed, name);
+      perIterRed.set(name, (perIterRed.get(name) || 0) + 1);
+    }
+    for (const name of (events.redsB || [])) if (name) {
+      bumpName(agg.playerRed, name);
+      perIterRed.set(name, (perIterRed.get(name) || 0) + 1);
+    }
   };
   for (const m of r.groupMatches || []) tally(m.events);
   for (const round of r.rounds || []) {
     for (const m of round.matches || []) tally(m.events);
   }
-  // P(player scores ≥1 in the whole tournament): one bump per iteration
-  // per player who got ≥1 goal anywhere.
   for (const name of perIterGoals.keys()) bumpName(agg.playerMatchesWithGoal, name);
-  // Golden Boot: highest goal-count in this tournament (ties → all share).
+  // Suspension proxy: ≥2 yellow cards or ≥1 red card in this tournament.
+  // We don't simulate the "actually banned next match" dynamic; this is
+  // the at-risk probability.
+  const suspended = new Set();
+  for (const [name, n] of perIterYellow) if (n >= 2) suspended.add(name);
+  for (const name of perIterRed.keys()) suspended.add(name);
+  for (const name of suspended) bumpName(agg.playerSuspended, name);
   let topGoals = 0;
   for (const v of perIterGoals.values()) if (v > topGoals) topGoals = v;
   if (topGoals > 0) {
@@ -497,14 +551,17 @@ function bumpBin(map, label) {
   map.set(label, (map.get(label) || 0) + 1);
 }
 
-function summarizePlayers({ playerGoals, playerAssists, playerMinutes, playerMatchesWithGoal, goldenBoot, iterations }) {
+function summarizePlayers({ playerGoals, playerAssists, playerMinutes, playerMatchesWithGoal, goldenBoot, playerYellow, playerRed, playerSuspended, iterations }) {
   const out = {};
-  // Expected tournament goals/assists per player = total / iterations
-  // P(Golden Boot) = sharedGoldenBootCount / iterations
+  // Expected tournament goals/assists/cards per player = total / iterations.
+  // P(Golden Boot)  = sharedGoldenBootCount / iterations.
+  // P(suspended)    = iters where the player got ≥2 Y or ≥1 R.
   const allNames = new Set([
     ...playerGoals.keys(),
     ...playerAssists.keys(),
     ...goldenBoot.keys(),
+    ...(playerYellow ? playerYellow.keys() : []),
+    ...(playerRed ? playerRed.keys() : []),
   ]);
   const players = [];
   for (const name of allNames) {
@@ -512,12 +569,18 @@ function summarizePlayers({ playerGoals, playerAssists, playerMinutes, playerMat
     const assists = playerAssists.get(name) || 0;
     const matchesScored = playerMatchesWithGoal.get(name) || 0;
     const gbCount = goldenBoot.get(name) || 0;
+    const yellow = playerYellow ? (playerYellow.get(name) || 0) : 0;
+    const red = playerRed ? (playerRed.get(name) || 0) : 0;
+    const suspended = playerSuspended ? (playerSuspended.get(name) || 0) : 0;
     players.push({
       name,
       expGoals: goals / iterations,
       expAssists: assists / iterations,
       pGoldenBoot: gbCount / iterations,
       pScoresAnyMatch: matchesScored / iterations,
+      expYellow: yellow / iterations,
+      expRed: red / iterations,
+      pSuspended: suspended / iterations,
     });
   }
   players.sort((a, b) => b.expGoals - a.expGoals);

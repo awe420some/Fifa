@@ -52,6 +52,16 @@ async function loadTitleHistory() {
   }
 }
 
+async function loadPlayerProps() {
+  try {
+    const resp = await fetch("./data/player-props-2026.json", { cache: "no-store" });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
 // Power-method bias correction p_i^γ / Σ p_j^γ.
 function powerTransform(probs, gamma) {
   if (!gamma || gamma === 1) return probs;
@@ -304,6 +314,115 @@ function renderMarket() {
   `;
   const r = pearson(top.map((x) => x.model), top.map((x) => x.market));
   $("#market-summary").innerHTML = dict.correlation(r.toFixed(2));
+}
+
+/* ─────────── Team Market Matrix ─────────── */
+
+const MATRIX_STAGES = [
+  { key: "title",     modelKey: "titleProbability",         marketKey: "titleAggregated" },
+  { key: "finals",    modelKey: "finalsProbability",        marketKey: "finalsAggregated" },
+  { key: "semis",     modelKey: "semisProbability",         marketKey: "semisAggregated" },
+  { key: "quarters",  modelKey: "quartersProbability",      marketKey: "quartersAggregated" },
+  { key: "r16",       modelKey: "r16Probability",           marketKey: "r16Aggregated" },
+  { key: "groupWin",  modelKey: "groupPositionDistribution", marketKey: "groupWinnerAggregated" },
+  { key: "topTwo",    modelKey: "groupAdvanceProbability",  marketKey: "topTwoAggregated" },
+];
+
+let _matrixSort = { key: "title", dir: "diff" };  // diff | model | market
+
+function matrixModelValue(code, stage) {
+  const mc = state.mc;
+  if (stage.key === "groupWin") {
+    const gp = mc.groupPositionDistribution?.[code];
+    return gp && gp.total ? gp.p1 / gp.total : 0;
+  }
+  const m = mc[stage.modelKey];
+  if (!m) return 0;
+  return m[code] || 0;
+}
+
+function matrixMarketValue(code, stage) {
+  const snap = state.marketSnapshot;
+  // Title falls back to aggregated/MARKET_ODDS_2026 for backward-compat.
+  if (stage.key === "title") {
+    return (snap?.titleAggregated || snap?.aggregated || MARKET_ODDS_2026)[code] ?? null;
+  }
+  return snap?.[stage.marketKey]?.[code] ?? null;
+}
+
+function renderTeamMarketMatrix() {
+  const dict = t();
+  const cols = dict.matrixCols;
+  const rows = TEAMS_2026.map((team) => {
+    const row = { code: team.code, name: teamName(team.code), stages: {} };
+    for (const stage of MATRIX_STAGES) {
+      const model = matrixModelValue(team.code, stage);
+      const market = matrixMarketValue(team.code, stage);
+      const diff = market != null ? model - market : null;
+      row.stages[stage.key] = { model, market, diff };
+    }
+    return row;
+  });
+  const sortKey = _matrixSort.key;
+  const sortDir = _matrixSort.dir;
+  rows.sort((a, b) => {
+    const sa = a.stages[sortKey];
+    const sb = b.stages[sortKey];
+    if (sortDir === "diff") {
+      const da = sa?.diff;
+      const db = sb?.diff;
+      if (da == null && db == null) return (sb.model || 0) - (sa.model || 0);
+      if (da == null) return 1;
+      if (db == null) return -1;
+      return db - da;
+    }
+    return (sb.model || 0) - (sa.model || 0);
+  });
+  const renderDiff = (d) => {
+    if (d == null) return `<span class="muted">—</span>`;
+    const sign = d >= 0 ? "+" : "−";
+    const cls = d >= 0 ? "edge-up" : "edge-down";
+    return `<span class="${cls}">${sign}${(Math.abs(d) * 100).toFixed(1)}</span>`;
+  };
+  const headerCell = (key, label) => `
+    <th data-sort="${key}" class="${sortKey === key ? "sorted-desc" : ""}">${escape(label)}</th>
+  `;
+  $("#team-matrix").innerHTML = `
+    <table class="team-matrix">
+      <thead><tr>
+        <th>${escape(cols.team)}</th>
+        ${headerCell("title", cols.title)}
+        ${headerCell("finals", cols.finals)}
+        ${headerCell("semis", cols.semis)}
+        ${headerCell("quarters", cols.quarters)}
+        ${headerCell("r16", cols.r16)}
+        ${headerCell("groupWin", cols.groupWin)}
+        ${headerCell("topTwo", cols.topTwo)}
+      </tr></thead>
+      <tbody>${rows.map((row) => `
+        <tr>
+          <td class="team-name">${escape(row.name)}</td>
+          ${MATRIX_STAGES.map((stage) => {
+            const s = row.stages[stage.key];
+            return `<td>
+              <div class="matrix-cell">
+                <span class="mc-model">${pct(s.model, s.model < 0.01 ? 2 : 1)}</span>
+                <span class="mc-market">${s.market != null ? pct(s.market, s.market < 0.01 ? 2 : 1) : "n/v"}</span>
+                <span class="mc-diff">${renderDiff(s.diff)}</span>
+              </div>
+            </td>`;
+          }).join("")}
+        </tr>
+      `).join("")}</tbody>
+    </table>
+  `;
+  // Wire up header clicks for sorting.
+  $$("#team-matrix th[data-sort]").forEach((th) => {
+    th.addEventListener("click", () => {
+      _matrixSort = { key: th.dataset.sort, dir: "diff" };
+      renderTeamMarketMatrix();
+    });
+  });
 }
 
 function pearson(xs, ys) {
@@ -694,6 +813,7 @@ async function bootstrap() {
   state.schedule = await loadSchedule();
   state.covariateProvider = state.schedule ? buildCovariateProvider(state.schedule) : null;
   state.titleHistory = await loadTitleHistory();
+  state.playerProps = await loadPlayerProps();
   // 1. Fit DC on ALL historical matches (group + KO across all years).
   state.dcParams = fitDCOnHistorical(HISTORICAL_KNOCKOUTS, HISTORICAL_ELO, NEW_HISTORICAL_MATCHES);
   // 2. Squad-strength deltas.
@@ -711,6 +831,7 @@ function renderAll() {
   renderDistribution();
   renderStages();
   renderMarket();
+  renderTeamMarketMatrix();
   renderGroups();
   renderPlayers();
   renderBacktest();
@@ -777,6 +898,11 @@ function renderPlayers() {
       <div class="dist-prob">${pct(r.pGoldenBoot, 2)}</div>
     </div>
   `).join("");
+  // Cards section (yellow + red top-10)
+  renderPlayerCards();
+  // Player prop comparisons
+  renderPlayerPropMarket("topscorer");
+  renderPlayerPropMarket("anytime");
   // Goal-minute heatmap
   const md = state.players.minuteDistribution || {};
   const maxBin = Math.max(...Object.values(md), 0.01);
@@ -822,6 +948,105 @@ async function computePlayerMC() {
   populatePlayersTeamSelect();
   renderPlayers();
   $("#dashboard").classList.remove("recomputing");
+}
+
+function renderPlayerCards() {
+  const dict = t();
+  const all = state.players?.players || [];
+  const byYellow = all
+    .filter((r) => r.expYellow > 0.05)
+    .slice()
+    .sort((a, b) => b.expYellow - a.expYellow)
+    .slice(0, 10);
+  if (byYellow.length === 0) {
+    $("#players-cards").innerHTML = `<p class="muted small">—</p>`;
+    return;
+  }
+  const cols = dict.playerCols;
+  $("#players-cards").innerHTML = `
+    <table class="stages-table">
+      <thead><tr>
+        <th>${escape(cols.rank)}</th>
+        <th>${escape(cols.name)}</th>
+        <th>${escape(cols.team)}</th>
+        <th>${escape(cols.yellow)}</th>
+        <th>${escape(cols.red)}</th>
+        <th>${escape(cols.suspended)}</th>
+      </tr></thead>
+      <tbody>${byYellow.map((row, i) => `
+        <tr>
+          <td>${i + 1}</td>
+          <td>${escape(row.name)}</td>
+          <td class="muted">${escape(teamName(teamCodeOf(row.name)) || "—")}</td>
+          <td class="num">${row.expYellow.toFixed(2)}</td>
+          <td class="num">${row.expRed.toFixed(3)}</td>
+          <td class="num">${pct(row.pSuspended, 1)}</td>
+        </tr>
+      `).join("")}</tbody>
+    </table>
+  `;
+}
+
+function renderPlayerPropMarket(kind) {
+  const dict = t();
+  const propData = state.playerProps?.[kind === "topscorer" ? "topScorer" : "anytimeScorer"] || {};
+  const containerId = kind === "topscorer" ? "#players-topscorer-market" : "#players-anytime-market";
+  const allPlayers = state.players?.players || [];
+  const modelKey = kind === "topscorer" ? "pGoldenBoot" : "pScoresAnyMatch";
+  const filter = state.playersTeamFilter;
+  // Build a row per player with model+market+diff. Filtered by team
+  // dropdown like the top-30 table.
+  const rows = allPlayers
+    .filter((r) => !filter || teamCodeOf(r.name) === filter)
+    .map((r) => {
+      const market = propData[r.name]?.aggregated ?? null;
+      const model = r[modelKey] || 0;
+      return {
+        name: r.name,
+        team: teamCodeOf(r.name),
+        model,
+        market,
+        diff: market != null ? model - market : null,
+      };
+    })
+    // Sort: players with market quotes first by |diff|, rest by model.
+    .sort((a, b) => {
+      if (a.market != null && b.market != null) return Math.abs(b.diff) - Math.abs(a.diff);
+      if (a.market != null) return -1;
+      if (b.market != null) return 1;
+      return b.model - a.model;
+    })
+    .slice(0, 25);
+  const cols = dict.propCols;
+  const formatDiff = (d) => {
+    if (d == null) return `<span class="muted">—</span>`;
+    const sign = d >= 0 ? "+" : "−";
+    const cls = d >= 0 ? "edge-up" : "edge-down";
+    return `<span class="${cls}">${sign}${(Math.abs(d) * 100).toFixed(1)} pp</span>`;
+  };
+  $(containerId).innerHTML = `
+    <table class="stages-table">
+      <thead><tr>
+        <th>${escape(cols.rank)}</th>
+        <th>${escape(cols.name)}</th>
+        <th>${escape(cols.team)}</th>
+        <th>${escape(cols.model)}</th>
+        <th>${escape(cols.market)}</th>
+        <th>${escape(cols.diff)}</th>
+      </tr></thead>
+      <tbody>${rows.map((r, i) => `
+        <tr>
+          <td>${i + 1}</td>
+          <td>${escape(r.name)}</td>
+          <td class="muted">${escape(teamName(r.team) || "—")}</td>
+          <td class="num">${pct(r.model, kind === "topscorer" ? 2 : 1)}</td>
+          <td class="num">${r.market != null ? pct(r.market, kind === "topscorer" ? 2 : 1) : `<span class="muted">n/v</span>`}</td>
+          <td class="num">${formatDiff(r.diff)}</td>
+        </tr>
+      `).join("")}</tbody>
+    </table>
+    <p class="muted small">${escape(dict.propDiffLegend)}</p>
+  `;
 }
 
 function populatePlayersTeamSelect() {
