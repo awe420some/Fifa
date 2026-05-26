@@ -16,6 +16,8 @@ import { squadEloAdjustments } from "./models/squad.js";
 import { DEFAULT_WEIGHTS } from "./models/ensemble.js";
 import { aggregateMarket, deVig } from "./models/market.js";
 import { buildCovariateProvider } from "./predictor.js";
+import { PLAYERS_2026 } from "./data/players-2026.js";
+import { GOAL_MINUTE_BINS } from "./models/players.js";
 
 async function loadMarketSnapshot() {
   try {
@@ -85,6 +87,9 @@ const state = {
   marketGamma: 1.0,
   bootstrap: false,
   bootstrapFits: null,
+  players: null,
+  playersComputing: false,
+  playersTeamFilter: "",
   options: {
     useHost: true,
     useSquad: true,
@@ -500,6 +505,9 @@ function setupScenarios() {
       recompute();
       renderAll();
       $("#dashboard").classList.remove("recomputing");
+      // If player tracking is on, the player projections are stale —
+      // refresh them with the new scenario.
+      if (state.players) await computePlayerMC();
     });
   });
   const bootstrapToggle = $("#bootstrap-toggle");
@@ -546,6 +554,25 @@ function setupScenarios() {
       recompute();
       renderAll();
       $("#dashboard").classList.remove("recomputing");
+    });
+  }
+  const playersToggle = $("#players-toggle");
+  if (playersToggle) {
+    playersToggle.addEventListener("change", async () => {
+      if (!playersToggle.checked) {
+        state.players = null;
+        $("#players-team-pick").hidden = true;
+        renderPlayers();
+        return;
+      }
+      await computePlayerMC();
+    });
+  }
+  const teamSel = $("#players-team-select");
+  if (teamSel) {
+    teamSel.addEventListener("change", () => {
+      state.playersTeamFilter = teamSel.value;
+      renderPlayers();
     });
   }
 }
@@ -685,12 +712,127 @@ function renderAll() {
   renderStages();
   renderMarket();
   renderGroups();
+  renderPlayers();
   renderBacktest();
   renderCalibration();
   renderHistoryFanChart();
   renderContext();
   renderMethodology();
   fireConfetti();
+}
+
+/* ─────────── Player predictions ─────────── */
+
+const playerToTeam = new Map();
+const teamCodeOf = (name) => playerToTeam.get(name) || "";
+for (const p of PLAYERS_2026) playerToTeam.set(p.name, p.code);
+
+function renderPlayers() {
+  const dict = t();
+  if (!state.players || !state.players.players) {
+    $("#players-table-wrap").hidden = true;
+    return;
+  }
+  $("#players-table-wrap").hidden = false;
+  const filter = state.playersTeamFilter;
+  const all = state.players.players;
+  const filtered = filter ? all.filter((r) => teamCodeOf(r.name) === filter) : all;
+  const cols = dict.playerCols;
+  const top = filtered.slice(0, 30);
+  const rowsHtml = top.map((row, i) => `
+    <tr>
+      <td>${i + 1}</td>
+      <td>${escape(row.name)}</td>
+      <td class="muted">${escape(teamName(teamCodeOf(row.name)) || "—")}</td>
+      <td class="num">${row.expGoals.toFixed(2)}</td>
+      <td class="num">${row.expAssists.toFixed(2)}</td>
+      <td class="num">${pct(row.pScoresAnyMatch, 1)}</td>
+      <td class="num">${pct(row.pGoldenBoot, 2)}</td>
+    </tr>
+  `).join("");
+  $("#players-table").innerHTML = `
+    <table class="stages-table">
+      <thead><tr>
+        <th>${escape(cols.rank)}</th>
+        <th>${escape(cols.name)}</th>
+        <th>${escape(cols.team)}</th>
+        <th>${escape(cols.expGoals)}</th>
+        <th>${escape(cols.expAssists)}</th>
+        <th>${escape(cols.pAny)}</th>
+        <th>${escape(cols.pBoot)}</th>
+      </tr></thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>
+  `;
+  // Top Golden Boot probabilities
+  const gb = all
+    .filter((r) => r.pGoldenBoot > 0.005)
+    .sort((a, b) => b.pGoldenBoot - a.pGoldenBoot)
+    .slice(0, 10);
+  const gbMax = gb[0]?.pGoldenBoot || 0.01;
+  $("#players-goldenboot").innerHTML = gb.map((r) => `
+    <div class="dist-row">
+      <div class="dist-team">${escape(r.name)} <span class="muted small">${escape(teamName(teamCodeOf(r.name)) || "—")}</span></div>
+      <div class="dist-bar"><div class="dist-fill" style="width:${(r.pGoldenBoot / gbMax) * 100}%"></div></div>
+      <div class="dist-prob">${pct(r.pGoldenBoot, 2)}</div>
+    </div>
+  `).join("");
+  // Goal-minute heatmap
+  const md = state.players.minuteDistribution || {};
+  const maxBin = Math.max(...Object.values(md), 0.01);
+  $("#players-minutes").innerHTML = `
+    <div class="minute-grid">
+      ${GOAL_MINUTE_BINS.map((b) => {
+        const p = md[b.label] || 0;
+        const intensity = (p / maxBin).toFixed(3);
+        return `<div class="minute-cell" style="--p:${intensity}">
+          <div class="minute-label">${escape(b.label)}</div>
+          <div class="minute-val">${pct(p, 1)}</div>
+        </div>`;
+      }).join("")}
+    </div>
+    <p class="muted small">Sampled from ${state.players.totalGoalsSampled.toLocaleString()} goals across ${state.mc.iterations.toLocaleString()} simulated tournaments.</p>
+  `;
+}
+
+async function computePlayerMC() {
+  $("#dashboard").classList.add("recomputing");
+  await new Promise((r) => requestAnimationFrame(r));
+  // 8 000-iter MC with per-player goal allocation. We trade total
+  // iterations for player detail; the main 25 000-MC numbers stay in
+  // state.mc and still drive the headline title/stage tables.
+  const playerOpts = {
+    squadDelta: state.squadDelta,
+    dcParams: state.dcParams,
+    covariateProvider: state.covariateProvider,
+    weights: DEFAULT_WEIGHTS,
+    useHost: state.options.useHost,
+    useSquad: state.options.useSquad,
+    useDC: state.options.useDC,
+    useMarket: state.options.useMarket,
+    useCovariates: state.options.useCovariates,
+    trackPlayers: true,
+  };
+  const res = runEnsembleMonteCarlo(
+    TEAMS_2026, GROUPS_2026, hostCodes, ELO_2026,
+    playerOpts, 8000,
+  );
+  state.players = res.players;
+  $("#players-team-pick").hidden = false;
+  populatePlayersTeamSelect();
+  renderPlayers();
+  $("#dashboard").classList.remove("recomputing");
+}
+
+function populatePlayersTeamSelect() {
+  const sel = $("#players-team-select");
+  if (!sel) return;
+  const codes = [...new Set(PLAYERS_2026.map((p) => p.code))]
+    .map((c) => ({ c, name: teamName(c) }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  sel.innerHTML = `<option value="">— all —</option>` +
+    codes.map(({ c, name }) => `<option value="${c}">${escape(name)}</option>`).join("");
+  sel.value = state.playersTeamFilter;
 }
 
 function fireConfetti() {

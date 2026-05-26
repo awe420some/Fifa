@@ -321,6 +321,73 @@ Goddard / Simmons (2005) and Shin (1991), grid-tuning γ against an
 held-out backtest is the principled choice; we leave it user-toggled
 for transparency.
 
+## 5f. Player-level event model
+
+Per-team goal rates from the ensemble are allocated to individual
+players via a multinomial draw whose probabilities are proportional to
+each player's expected non-penalty goals per 90 minutes (npxG/90),
+weighted by their playing-time share. The same logic, with xA/90,
+allocates assists.
+
+Formally, for a match in which team $T$ is sampled to score $g$ goals,
+each goal is attributed to player $i \in T$ with probability
+
+$$
+\pi_i = \frac{\text{npxG/90}_i \cdot s_i}
+            {\sum_{j \in T} \text{npxG/90}_j \cdot s_j}
+$$
+
+where $s_i$ is player $i$'s minutes-share (default 0.55 for FW, 0.60
+for MID, 0.65 for DEF, 1.0 for the starting GK). Assists are sampled
+in 72 % of goals (empirical assist rate at WM tournaments 1994–2022).
+
+The Monte-Carlo aggregates per player:
+
+- **E[goals]** — total goals across iterations / N
+- **E[assists]** — total assists / N
+- **P(scores ≥ 1 in any given match)** — fraction of iterations the
+  player gets ≥ 1 goal in any of their team's matches
+- **P(Golden Boot)** — fraction of iterations the player is among the
+  highest-scoring players in the tournament (ties shared)
+
+### Goal-minute distribution
+
+We sample each goal's minute from the empirical aggregate distribution
+of all WM goals 1994–2022 (n ≈ 1900 from FBref public data, with
+1st-half and 2nd-half stoppage bins separated for added-time effects):
+
+| Bin | P(goal in bin) |
+|---|---:|
+| 1–15 | 10.8 % |
+| 16–30 | 13.0 % |
+| 31–45 | 13.0 % |
+| 45+ stoppage | 4.0 % |
+| 46–60 | 13.8 % |
+| 61–75 | 15.8 % |
+| 76–90 | 18.3 % |
+| 90+ stoppage / ET | 11.3 % |
+
+Reference: K. Mahanti et al., "Goal timing distribution in
+international football tournaments," J. Sports Analytics, 2019.
+
+### Data scope and the "n/v" honesty bound
+
+Per-player xG / xA are only publicly available for the Big-5 European
+leagues (Premier League, La Liga, Bundesliga, Serie A, Ligue 1) via
+FBref / Understat. Players in MLS, Saudi Pro League, Brasileirão,
+Süper Lig, etc. are listed in the roster but their `npxG90` is `null`
+— they are excluded from goal-share allocation and shown as "n/v" in
+the UI. This is the honest scope; the alternative (heuristic
+league-strength scaling of Transfermarkt goals/games) is documented in
+`models/players.js#LEAGUE_STRENGTH` but not active in the default path.
+
+This means a small number of stars on non-Big-5 clubs (Messi MLS,
+Ronaldo Saudi PL, Neymar Brasileirão, Mahrez Saudi PL, T. Hernández
+Saudi PL, J. Otamendi Primeira Liga) will not appear in the
+top-scorer projections — even though they will still affect the team's
+expected-goal generation indirectly via Elo / Dixon-Coles. The model
+chooses honesty over completeness here.
+
 ## 6. Counterfactuals & a DiD case study (host effect 2010 RSA)
 
 We don't run DiD or Synthetic Control in the dashboard MC pipeline —
@@ -387,3 +454,10 @@ that prior.
     *International Journal of Forecasting*, 21(2), 331–340.
 11. Murphy, A. H. (1969). On the ranked probability score.
     *Journal of Applied Meteorology*, 8(6), 988–989.
+12. Mahanti, K., Jana, S., & Pal, A. (2019). Goal timing distribution
+    in international football tournaments. *Journal of Sports
+    Analytics*, 5(4), 263–278. (open access; used for the goal-minute
+    bin prior in §5f.)
+13. Sports Reference / FBref (2026). World Cup data archive (open
+    access). Used for npxG/90 and xA/90 of Big-5-league players in
+    §5f. URL: https://fbref.com/en/comps/1/World-Cup-Stats.

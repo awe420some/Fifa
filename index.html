@@ -94,6 +94,26 @@
         <div id="groups" class="group-grid"></div>
       </section>
 
+      <section class="card wide reveal" id="players-card">
+        <h3 data-i18n="sectionPlayers">Player Predictions</h3>
+        <p class="muted small" data-i18n="playersHint"></p>
+        <div class="players-controls">
+          <label><input id="players-toggle" type="checkbox"><span data-i18n="playersToggle">Compute player predictions (~30 s)</span></label>
+          <label class="gamma-pick" id="players-team-pick" hidden>
+            <span data-i18n="playersTeamFilter">Team filter</span>
+            <select id="players-team-select"></select>
+          </label>
+        </div>
+        <div id="players-table-wrap" hidden>
+          <h4 data-i18n="playersTopScorers">Top 30 expected scorers</h4>
+          <div id="players-table"></div>
+          <h4 data-i18n="playersGoldenBoot">Golden Boot probability</h4>
+          <div id="players-goldenboot"></div>
+          <h4 data-i18n="playersMinuteHeatmap">Goal-time distribution (per 15 min bin)</h4>
+          <div id="players-minutes"></div>
+        </div>
+      </section>
+
       <section class="card wide reveal">
         <h3 data-i18n="sectionBacktest">Backtest 1994–2022</h3>
         <div id="backtest-summary" class="muted"></div>
