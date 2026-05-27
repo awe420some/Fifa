@@ -177,9 +177,38 @@ async function scrapeOddschecker(browser) {
   return { source: "Oddschecker", url: "https://www.oddschecker.com/football/world-cup/winner", odds };
 }
 
-function ua() {
-  return "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36";
+/* ─────────── Group Winner scraping (Polymarket / DraftKings) ─────────── */
+
+// Polymarket lists one event per group; the URL pattern is stable.
+// We scrape Group A through Group L (12 groups in 2026 expanded format).
+async function scrapeGroupWinnersPolymarket(browser) {
+  const ctx = await browser.newContext({ userAgent: ua() });
+  const page = await ctx.newPage();
+  const odds = {};
+  const groups = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"];
+  for (const g of groups) {
+    try {
+      const url = `https://polymarket.com/event/2026-world-cup-group-${g}-winner`;
+      await page.goto(url, { waitUntil: "networkidle", timeout: 25000 });
+      const rows = await page.$$eval('[role="row"], li, div[data-testid="outcome"]', (els) =>
+        els.map((el) => el.textContent.trim()).filter((t) => /\d/.test(t)).slice(0, 12)
+      );
+      for (const r of rows) {
+        const m = r.match(/^(.+?)\s+(?:Yes\s+)?(\d+(?:\.\d+)?)¢/);
+        if (m) {
+          const code = toCode(m[1]);
+          const p = parseFloat(m[2]) / 100;
+          if (code && p > 0 && p < 1) odds[code] = p;
+        }
+      }
+    } catch { /* skip this group, try next */ }
+  }
+  await ctx.close();
+  if (Object.keys(odds).length < 6) throw new Error("polymarket-groups: too few teams");
+  return { source: "Polymarket", url: "https://polymarket.com/event/2026-world-cup-group-{a..l}-winner", odds };
 }
+
+
 
 /* ─────────── De-vigging + logit-mean aggregation ─────────── */
 
@@ -249,18 +278,51 @@ results.forEach((r, i) => {
   }
 });
 
-const aggregated = aggregate(sources);
+const titleAggregated = aggregate(sources);
+
+// Stage 2: group-winner scraping. Single source (Polymarket) for now —
+// DraftKings doesn't expose a stable JSON path and other sources are
+// geo-blocked. Fail-soft so the title snapshot still publishes if the
+// group endpoint is down.
+let groupWinnerAggregated = {};
+let groupSources = [];
+try {
+  const gwBrowser = await chromium.launch();
+  const gwRes = await withinTimeout(scrapeGroupWinnersPolymarket(gwBrowser), PER_SOURCE_TIMEOUT_MS, "Polymarket-groups");
+  await gwBrowser.close();
+  groupSources = [{ name: gwRes.source, url: gwRes.url, teams: Object.keys(gwRes.odds).length, odds: gwRes.odds }];
+  groupWinnerAggregated = aggregate(groupSources);
+  console.log(`✓ Polymarket (groups): ${Object.keys(gwRes.odds).length} teams`);
+} catch (err) {
+  console.log(`✗ Polymarket (groups): ${err.message}`);
+  unreachable.push({ name: "Polymarket (groups)", reason: err.message });
+}
+
 const snapshot = {
   asOf: SNAPSHOT_DATE,
   fetchedAt: new Date().toISOString(),
   sources,
+  groupSources,
   unreachable,
-  aggregated,
-  method: "Per-source de-vigging (uniform) + logit-mean across sources + final renormalization",
+  // Backward-compat: `aggregated` keeps pointing at title odds.
+  aggregated: titleAggregated,
+  titleAggregated,
+  // Stage-specific maps. Currently only title + groupWinner are
+  // actively populated by the scraper; the rest are reserved for when
+  // bookmakers post those markets closer to kickoff and the app
+  // falls back to "n/v" until then.
+  finalsAggregated: {},
+  semisAggregated: {},
+  quartersAggregated: {},
+  r16Aggregated: {},
+  r32Aggregated: {},
+  groupWinnerAggregated,
+  topTwoAggregated: {},
+  method: "Per-source de-vigging (uniform) + logit-mean across sources + final renormalization. Title + group-winner markets actively scraped; finals/semis/QF/R16/top-2 reserved for when bookmaker markets open (~4 weeks pre-kickoff).",
 };
 writeFileSync(OUTPUT_PATH, JSON.stringify(snapshot, null, 2));
-console.log(`\nWrote ${OUTPUT_PATH} — ${sources.length} source(s), ${Object.keys(aggregated).length} teams aggregated`);
+console.log(`\nWrote ${OUTPUT_PATH} — ${sources.length} title source(s), ${Object.keys(titleAggregated).length} teams (title), ${Object.keys(groupWinnerAggregated).length} teams (group-winner)`);
 if (sources.length === 0) {
-  console.error("No sources succeeded — keeping previous snapshot.");
+  console.error("No title sources succeeded — keeping previous snapshot.");
   process.exit(1);
 }
