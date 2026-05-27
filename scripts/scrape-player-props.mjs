@@ -38,45 +38,53 @@ function americanToImplied(american) {
 /* ─────────── Per-source scrapers ─────────── */
 
 async function scrapeDraftKingsPlayerProps(browser) {
-  // Two markets to hit on DraftKings' World Cup outright page:
-  // - "World Cup Top Goalscorer"
-  // - "Anytime Goalscorer (Tournament)"
+  // DraftKings posts top-scorer and anytime-scorer as separate
+  // accordion sections on the World Cup outright page. We navigate
+  // into each section's category page so the classification is
+  // unambiguous — there's no reliable probability heuristic to split
+  // them apart (Mbappé's top-scorer +600 ≈ 14% > 5%, which would
+  // mis-classify favourites if we did).
   const ctx = await browser.newContext({ userAgent: UA });
   const page = await ctx.newPage();
-  await page.goto("https://sportsbook.draftkings.com/leagues/soccer/world-cup", {
-    waitUntil: "domcontentloaded", timeout: 30000,
-  });
-  // DraftKings renders prop categories as accordion sections. Scrape
-  // visible "Player Name +xxx" pairs from any region of the page.
-  const items = await page.evaluate(() => {
-    const out = [];
-    document.querySelectorAll("a, div, span, li").forEach((el) => {
-      const t = el.textContent;
-      if (!t) return;
-      // "Kylian Mbappé +600" or "Erling Haaland -110"
-      const m = t.match(/^([A-ZÀ-Ý][\p{L}\s'.\-]{1,40})\s+([+\-]\d{2,5})$/u);
-      if (m) {
-        const name = m[1].trim();
-        const odds = m[2];
-        if (name.length >= 4 && name.split(/\s+/).length >= 2) {
-          out.push({ name, american: odds });
+  const scrapeCategoryPage = async (url) => {
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    const items = await page.evaluate(() => {
+      const out = [];
+      document.querySelectorAll("a, div, span, li").forEach((el) => {
+        const t = el.textContent;
+        if (!t) return;
+        const m = t.match(/^([A-ZÀ-Ý][\p{L}\s'.\-]{1,40})\s+([+\-]\d{2,5})$/u);
+        if (m) {
+          const name = m[1].trim();
+          if (name.length >= 4 && name.split(/\s+/).length >= 2) {
+            out.push({ name, american: m[2] });
+          }
         }
-      }
+      });
+      return out;
     });
-    return out;
-  });
+    const odds = {};
+    for (const it of items) {
+      const p = americanToImplied(it.american);
+      if (p == null || p <= 0 || p >= 1) continue;
+      odds[it.name] = p;
+    }
+    return odds;
+  };
+  // Category subpaths are best-effort and may 404 if DraftKings
+  // restructures the navigation. We try both market types
+  // independently — one failing doesn't poison the other.
+  let topScorer = {};
+  let anytimeScorer = {};
+  try {
+    topScorer = await scrapeCategoryPage("https://sportsbook.draftkings.com/leagues/soccer/world-cup?category=top-goalscorer");
+  } catch { /* leave empty */ }
+  try {
+    anytimeScorer = await scrapeCategoryPage("https://sportsbook.draftkings.com/leagues/soccer/world-cup?category=anytime-goalscorer");
+  } catch { /* leave empty */ }
   await ctx.close();
-  if (items.length === 0) throw new Error("draftkings: no player props parsed");
-  // Heuristic split: short prices (<5%) → top-scorer market, otherwise
-  // anytime-scorer. DraftKings posts both around the same table; this
-  // separation is approximate.
-  const topScorer = {};
-  const anytimeScorer = {};
-  for (const it of items) {
-    const p = americanToImplied(it.american);
-    if (p == null || p <= 0 || p >= 1) continue;
-    if (p < 0.05) topScorer[it.name] = p;
-    else anytimeScorer[it.name] = p;
+  if (Object.keys(topScorer).length === 0 && Object.keys(anytimeScorer).length === 0) {
+    throw new Error("draftkings: no player props parsed from either market");
   }
   return { source: "DraftKings", topScorer, anytimeScorer };
 }
