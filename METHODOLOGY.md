@@ -321,6 +321,170 @@ Goddard / Simmons (2005) and Shin (1991), grid-tuning γ against an
 held-out backtest is the principled choice; we leave it user-toggled
 for transparency.
 
+## 5f. Player-level event model
+
+Per-team goal rates from the ensemble are allocated to individual
+players via a multinomial draw whose probabilities are proportional to
+each player's expected non-penalty goals per 90 minutes (npxG/90),
+weighted by their playing-time share. The same logic, with xA/90,
+allocates assists.
+
+Formally, for a match in which team $T$ is sampled to score $g$ goals,
+each goal is attributed to player $i \in T$ with probability
+
+$$
+\pi_i = \frac{\text{npxG/90}_i \cdot s_i}
+            {\sum_{j \in T} \text{npxG/90}_j \cdot s_j}
+$$
+
+where $s_i$ is player $i$'s minutes-share (default 0.55 for FW, 0.60
+for MID, 0.65 for DEF, 1.0 for the starting GK). Assists are sampled
+in 72 % of goals (empirical assist rate at WM tournaments 1994–2022).
+
+The Monte-Carlo aggregates per player:
+
+- **E[goals]** — total goals across iterations / N
+- **E[assists]** — total assists / N
+- **P(scores ≥ 1 in any given match)** — fraction of iterations the
+  player gets ≥ 1 goal in any of their team's matches
+- **P(Golden Boot)** — fraction of iterations the player is among the
+  highest-scoring players in the tournament (ties shared)
+
+### Goal-minute distribution
+
+We sample each goal's minute from the empirical aggregate distribution
+of all WM goals 1994–2022 (n ≈ 1900 from FBref public data, with
+1st-half and 2nd-half stoppage bins separated for added-time effects):
+
+| Bin | P(goal in bin) |
+|---|---:|
+| 1–15 | 10.8 % |
+| 16–30 | 13.0 % |
+| 31–45 | 13.0 % |
+| 45+ stoppage | 4.0 % |
+| 46–60 | 13.8 % |
+| 61–75 | 15.8 % |
+| 76–90 | 18.3 % |
+| 90+ stoppage / ET | 11.3 % |
+
+Reference: K. Mahanti et al., "Goal timing distribution in
+international football tournaments," J. Sports Analytics, 2019.
+
+### Data scope and the "n/v" honesty bound
+
+Per-player xG / xA are only publicly available for the Big-5 European
+leagues (Premier League, La Liga, Bundesliga, Serie A, Ligue 1) via
+FBref / Understat. Players in MLS, Saudi Pro League, Brasileirão,
+Süper Lig, etc. are listed in the roster but their `npxG90` is `null`
+— they are excluded from goal-share allocation and shown as "n/v" in
+the UI. This is the honest scope; the alternative (heuristic
+league-strength scaling of Transfermarkt goals/games) is documented in
+`models/players.js#LEAGUE_STRENGTH` but not active in the default path.
+
+This means a small number of stars on non-Big-5 clubs (Messi MLS,
+Ronaldo Saudi PL, Neymar Brasileirão, Mahrez Saudi PL, T. Hernández
+Saudi PL, J. Otamendi Primeira Liga) will not appear in the
+top-scorer projections — even though they will still affect the team's
+expected-goal generation indirectly via Elo / Dixon-Coles. The model
+chooses honesty over completeness here.
+
+## 5g. Card / discipline model
+
+Per match per team we draw a Poisson count for yellow cards
+$Y \sim \mathrm{Poisson}(2.05)$ and a Poisson count for red cards
+$R \sim \mathrm{Poisson}(0.08)$, then attribute each card to a player
+via a positional multinomial. The position priors come from FIFA
+Technical Reports 2010–2022 + Premier League season-aggregate
+position breakdown:
+
+| Position | P(yellow) | P(red) |
+|---|---:|---:|
+| GK  | 0.05 | 0.05 |
+| DEF | 0.30 | 0.40 |
+| MID | 0.45 | 0.35 |
+| FW  | 0.20 | 0.20 |
+
+Per player
+
+$$
+\pi_i^{\text{card}} = \frac{\text{posWeight}_i \cdot s_i}
+                          {\sum_j \text{posWeight}_j \cdot s_j}
+$$
+
+The MC aggregates **E[Y]**, **E[R]** and **P(suspended at risk)** — the
+last is the fraction of iterations where the player picked up either
+≥ 2 yellows or ≥ 1 red anywhere in the tournament (proxy for the
+FIFA "2 Y → next-match ban" rule; the actual ban-dynamic is not
+simulated in the bracket).
+
+Honest scope note: card rates are positional, not per-player history.
+Casemiro / Rodri-archetypes (defensive midfielders) thus dominate the
+ranking — this is correct in expectation but doesn't capture
+individual aggressiveness (Calhanoglu vs Rodri, both DM but different
+profiles).
+
+## 5h. Player-prop comparison (Modell vs Markt)
+
+For each Big-5-stat player we compare two model probabilities against
+the de-vigged aggregate of DraftKings + Polymarket player-prop quotes:
+
+- **Top scorer**: model P(Golden Boot) vs market top-scorer odds.
+- **Anytime scorer (in WC)**: model P(scores ≥ 1 in tournament) vs
+  market anytime-scorer odds.
+
+The de-vigging logic is unchanged from §2.4 — it operates on
+player-name keys instead of team-code keys via the
+`aggregatePlayerMarket(playerData)` wrapper in `models/market.js`.
+
+The displayed **Diff = Modell − Markt** column highlights:
+
+- `+` percentage point → model thinks the player is more likely than
+  the market does (potential **value pick** if your model is calibrated
+  correctly).
+- `−` percentage point → market is more bullish (the bookies see
+  something the model misses; usually injury status, form, or coaches'
+  selection signals).
+
+Honest scope note: the data is a manually-curated snapshot for ~30
+top-scorer candidates (May 2026). FanDuel / Pinnacle / Bet365 / Bet365
+are geo- or bot-blocked from this runtime, so only DraftKings +
+Polymarket contribute. Players outside the snapshot's top-30 show
+"n/v" in the market column; the model still produces a probability for
+them, just without a market comparison.
+
+For non-Big-5-league stars (Messi MLS, Ronaldo Saudi PL, Neymar
+Brasileirão) the model side is also `n/v` — `npxG90` is unavailable
+outside the Big-5. The market side may still carry a quote (the books
+do list them), but no diff is computed.
+
+## 5i. Team-Market Matrix
+
+The bookmaker odds page is extended from "title winner only" to a full
+seven-stage market matrix per team: Title, Finals, Semis, QF, R16,
+Group Winner, Group Top-2. The model side reads directly from
+`state.mc.{title,finals,semis,quarters,r16,groupAdvance,groupPosition}Probability`
+maps (the MC already produces these per team).
+
+The market side reads from the extended `data/market-snapshot.json`
+schema:
+
+```json
+{
+  "asOf": "...",
+  "titleAggregated": { CODE: prob, ... },
+  "finalsAggregated": { CODE: prob, ... },
+  "semisAggregated":  { CODE: prob, ... },
+  ...
+  "groupWinnerAggregated": { CODE: prob, ... },
+  "topTwoAggregated":      { CODE: prob, ... }
+}
+```
+
+When a stage's `*Aggregated` map is missing or empty (the typical
+case for stages other than Title, since most books don't post those
+markets until ~6 weeks before the tournament), the column displays
+`n/v`. The matrix is sortable by any stage's diff; click the header.
+
 ## 6. Counterfactuals & a DiD case study (host effect 2010 RSA)
 
 We don't run DiD or Synthetic Control in the dashboard MC pipeline —
@@ -387,3 +551,10 @@ that prior.
     *International Journal of Forecasting*, 21(2), 331–340.
 11. Murphy, A. H. (1969). On the ranked probability score.
     *Journal of Applied Meteorology*, 8(6), 988–989.
+12. Mahanti, K., Jana, S., & Pal, A. (2019). Goal timing distribution
+    in international football tournaments. *Journal of Sports
+    Analytics*, 5(4), 263–278. (open access; used for the goal-minute
+    bin prior in §5f.)
+13. Sports Reference / FBref (2026). World Cup data archive (open
+    access). Used for npxG/90 and xA/90 of Big-5-league players in
+    §5f. URL: https://fbref.com/en/comps/1/World-Cup-Stats.

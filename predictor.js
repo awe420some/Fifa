@@ -29,6 +29,15 @@ import {
 } from "./models/ensemble.js";
 import { outcomeProbsFromPoisson } from "./models/elo.js";
 import { teamCovariateOffset } from "./models/covariates.js";
+import {
+  precomputeShares,
+  precomputeCardShares,
+  sampleScorer,
+  sampleMinuteBin,
+  sampleCardCount,
+  CARDS_PER_MATCH,
+  GOAL_MINUTE_BINS,
+} from "./models/players.js";
 
 // Build a lookup `(groupLetter, teamA.code, teamB.code) → { venueId, restA, restB }`
 // from the official fixture list. Used to apply travel/timezone/rest/climate
@@ -181,7 +190,70 @@ function sampleMatch(teamA, teamB, ctx, rng) {
     const mean = Math.round((scoreA + scoreB) / 2);
     scoreA = scoreB = mean;
   }
-  return { scoreA, scoreB, probs, outcome };
+  const events = ctx.playerShares
+    ? samplePlayerEvents(teamA.code, teamB.code, scoreA, scoreB, ctx, rng)
+    : null;
+  if (events && ctx.cardShares) {
+    addPlayerCards(teamA.code, teamB.code, ctx, rng, events);
+  }
+  return { scoreA, scoreB, probs, outcome, events };
+}
+
+// Mutates `events` with per-player yellow/red card draws for this match.
+// Uses Poisson(CARDS_PER_MATCH.yellow) per team and a Bernoulli for red
+// (red events are rare; Poisson with λ=0.08 ≈ Bernoulli at this rate).
+function addPlayerCards(codeA, codeB, ctx, rng, events) {
+  const sharesA = ctx.cardShares.get(codeA);
+  const sharesB = ctx.cardShares.get(codeB);
+  events.yellowsA = []; events.yellowsB = [];
+  events.redsA = []; events.redsB = [];
+  const yA = sampleCardCount(CARDS_PER_MATCH.yellow, rng);
+  const yB = sampleCardCount(CARDS_PER_MATCH.yellow, rng);
+  const rA = sampleCardCount(CARDS_PER_MATCH.red, rng);
+  const rB = sampleCardCount(CARDS_PER_MATCH.red, rng);
+  if (sharesA) {
+    for (let i = 0; i < yA; i++) events.yellowsA.push(sampleScorer(sharesA.yellow, rng));
+    for (let i = 0; i < rA; i++) events.redsA.push(sampleScorer(sharesA.red, rng));
+  }
+  if (sharesB) {
+    for (let i = 0; i < yB; i++) events.yellowsB.push(sampleScorer(sharesB.yellow, rng));
+    for (let i = 0; i < rB; i++) events.redsB.push(sampleScorer(sharesB.red, rng));
+  }
+}
+
+// Multinomial allocation of goals + assists + minute bins to players,
+// given pre-computed per-team shares. Returns compact arrays of strings
+// (player names) and small ints (minute bin index) so the MC loop can
+// fold them into team counters cheaply.
+function samplePlayerEvents(codeA, codeB, scoreA, scoreB, ctx, rng) {
+  const sharesA = ctx.playerShares.get(codeA);
+  const sharesB = ctx.playerShares.get(codeB);
+  const scorersA = [], scorersB = [];
+  const assistsA = [], assistsB = [];
+  const minutesA = [], minutesB = [];
+  for (let i = 0; i < scoreA; i++) {
+    if (sharesA) {
+      scorersA.push(sampleScorer(sharesA.goal, rng));
+      const assistName = rng() < 0.72 ? sampleScorer(sharesA.assist, rng) : null;
+      assistsA.push(assistName);
+    } else {
+      scorersA.push(null);
+      assistsA.push(null);
+    }
+    minutesA.push(sampleMinuteBin(rng));
+  }
+  for (let i = 0; i < scoreB; i++) {
+    if (sharesB) {
+      scorersB.push(sampleScorer(sharesB.goal, rng));
+      const assistName = rng() < 0.72 ? sampleScorer(sharesB.assist, rng) : null;
+      assistsB.push(assistName);
+    } else {
+      scorersB.push(null);
+      assistsB.push(null);
+    }
+    minutesB.push(sampleMinuteBin(rng));
+  }
+  return { scorersA, scorersB, assistsA, assistsB, minutesA, minutesB };
 }
 
 // Knockout — 90 min → 30 min ET (κ-scaled) → Elo-damped shootout.
@@ -193,13 +265,26 @@ function knockoutResult(teamA, teamB, ctx, rng) {
   const result = sampleMatch(teamA, teamB, ctx, rng);
   let { scoreA, scoreB } = result;
   if (scoreA !== scoreB) {
-    return { winner: scoreA > scoreB ? teamA : teamB, scoreA, scoreB, probs: result.probs, et: false, penalty: false };
+    return { winner: scoreA > scoreB ? teamA : teamB, scoreA, scoreB, probs: result.probs, et: false, penalty: false, events: result.events };
   }
   const etScale = ET_KAPPA / 3;
-  scoreA += poissonSample(result.probs.lambdaH * etScale, rng);
-  scoreB += poissonSample(result.probs.lambdaA * etScale, rng);
+  const etA = poissonSample(result.probs.lambdaH * etScale, rng);
+  const etB = poissonSample(result.probs.lambdaA * etScale, rng);
+  scoreA += etA;
+  scoreB += etB;
+  // Allocate ET goals to players too (using the same shares).
+  if (ctx.playerShares && result.events) {
+    const etEvents = samplePlayerEvents(teamA.code, teamB.code, etA, etB, ctx, rng);
+    result.events.scorersA.push(...etEvents.scorersA);
+    result.events.scorersB.push(...etEvents.scorersB);
+    result.events.assistsA.push(...etEvents.assistsA);
+    result.events.assistsB.push(...etEvents.assistsB);
+    // Tag ET goals with a synthetic bin (90+).
+    for (let i = 0; i < etA; i++) result.events.minutesA.push(GOAL_MINUTE_BINS[GOAL_MINUTE_BINS.length - 1]);
+    for (let i = 0; i < etB; i++) result.events.minutesB.push(GOAL_MINUTE_BINS[GOAL_MINUTE_BINS.length - 1]);
+  }
   if (scoreA !== scoreB) {
-    return { winner: scoreA > scoreB ? teamA : teamB, scoreA, scoreB, probs: result.probs, et: true, penalty: false };
+    return { winner: scoreA > scoreB ? teamA : teamB, scoreA, scoreB, probs: result.probs, et: true, penalty: false, events: result.events };
   }
   const eA = effectiveElo(teamA, ctx.eloMap, ctx.squadDelta, ctx.options);
   const eB = effectiveElo(teamB, ctx.eloMap, ctx.squadDelta, ctx.options);
@@ -207,7 +292,7 @@ function knockoutResult(teamA, teamB, ctx, rng) {
   const pShootout = 0.5 + (pAelo - 0.5) * ELO_CONFIG.shootoutDamp;
   return {
     winner: rng() < pShootout ? teamA : teamB,
-    scoreA, scoreB, probs: result.probs, et: true, penalty: true,
+    scoreA, scoreB, probs: result.probs, et: true, penalty: true, events: result.events,
   };
 }
 
@@ -216,6 +301,7 @@ function knockoutResult(teamA, teamB, ctx, rng) {
 function simulateGroupStage(teams, groups, ctx, rng) {
   const teamsByCode = Object.fromEntries(teams.map((t) => [t.code, t]));
   const out = {};
+  const groupMatches = [];
   for (const [letter, codes] of Object.entries(groups)) {
     const groupTeams = codes.map((c) => teamsByCode[c]).filter(Boolean);
     if (groupTeams.length !== 4) continue;
@@ -226,8 +312,10 @@ function simulateGroupStage(teams, groups, ctx, rng) {
       const a = groupTeams[ai];
       const b = groupTeams[bi];
       ctx.currentGroup = letter;
-      const { scoreA, scoreB } = sampleMatch(a, b, ctx, rng);
+      const sampled = sampleMatch(a, b, ctx, rng);
       ctx.currentGroup = null;
+      const { scoreA, scoreB, events } = sampled;
+      groupMatches.push({ group: letter, a, b, scoreA, scoreB, events });
       stats[a.code].gf += scoreA; stats[a.code].ga += scoreB;
       stats[b.code].gf += scoreB; stats[b.code].ga += scoreA;
       if (scoreA > scoreB) { stats[a.code].p += 3; stats[a.code].w++; stats[b.code].l++; }
@@ -243,7 +331,7 @@ function simulateGroupStage(teams, groups, ctx, rng) {
     );
     out[letter] = table;
   }
-  return out;
+  return { tables: out, matches: groupMatches };
 }
 
 function pickQualifiers(groupTables) {
@@ -288,7 +376,9 @@ function simulateKnockout(qualifiers, ctx, rng) {
 }
 
 function simulateTournament(teams, groups, ctx, rng) {
-  const groupTables = simulateGroupStage(teams, groups, ctx, rng);
+  const groupStage = simulateGroupStage(teams, groups, ctx, rng);
+  const groupTables = groupStage.tables;
+  const groupMatches = groupStage.matches;
   const qualifiers = pickQualifiers(groupTables);
   const { rounds, champion } = simulateKnockout(qualifiers, ctx, rng);
   const lastRound = rounds[rounds.length - 1];
@@ -299,7 +389,7 @@ function simulateTournament(teams, groups, ctx, rng) {
   // or the initial 16 for a 32-team WM).
   const r16 = rounds[rounds.length - 4]?.matches?.flatMap((m) => [m.a, m.b]) || quarters.slice();
   return {
-    groupTables, qualifiers, rounds, champion,
+    groupTables, groupMatches, qualifiers, rounds, champion,
     finalists: finalMatch ? [finalMatch.a, finalMatch.b] : [],
     semifinalists: semis,
     quarterfinalists: quarters,
@@ -317,6 +407,8 @@ export function runEnsembleMonteCarlo(teams, groups, hostCodes, eloMap, options 
     dcParams: options.dcParams || null,
     covariateProvider: options.covariateProvider || null,
     weights: options.weights || DEFAULT_WEIGHTS,
+    playerShares: options.trackPlayers ? precomputeShares() : null,
+    cardShares: options.trackPlayers ? precomputeCardShares() : null,
     options: {
       useHost: options.useHost !== false,
       useSquad: options.useSquad !== false,
@@ -336,6 +428,15 @@ export function runEnsembleMonteCarlo(teams, groups, hostCodes, eloMap, options 
     groupAdvance: blank(),
   };
   const groupPos = Object.fromEntries(teams.map((t) => [t.code, { p1: 0, p2: 0, p3: 0, p4: 0, total: 0 }]));
+  // Player aggregation state (only if trackPlayers).
+  const playerGoals = ctx.playerShares ? new Map() : null;
+  const playerAssists = ctx.playerShares ? new Map() : null;
+  const playerMinutes = ctx.playerShares ? new Map() : null;
+  const playerMatchesWithGoal = ctx.playerShares ? new Map() : null;
+  const goldenBoot = ctx.playerShares ? new Map() : null;
+  const playerYellow = ctx.playerShares ? new Map() : null;
+  const playerRed = ctx.playerShares ? new Map() : null;
+  const playerSuspended = ctx.playerShares ? new Map() : null;
   let sampleRun = null;
 
   for (let i = 0; i < iterations; i++) {
@@ -361,10 +462,13 @@ export function runEnsembleMonteCarlo(teams, groups, hostCodes, eloMap, options 
         if (pos <= 1) counts.groupAdvance[code] = (counts.groupAdvance[code] || 0) + 1;
       }
     }
+    if (ctx.playerShares) {
+      aggregatePlayerEvents(r, { playerGoals, playerAssists, playerMinutes, playerMatchesWithGoal, goldenBoot, playerYellow, playerRed, playerSuspended });
+    }
     if (i === 0) sampleRun = r;
   }
   const toProbs = (m) => Object.fromEntries(Object.entries(m).map(([k, v]) => [k, v / iterations]));
-  return {
+  const result = {
     iterations,
     titleProbability: toProbs(counts.title),
     finalsProbability: toProbs(counts.finals),
@@ -377,6 +481,125 @@ export function runEnsembleMonteCarlo(teams, groups, hostCodes, eloMap, options 
     sampleRun,
     weights: ctx.weights,
   };
+  if (ctx.playerShares) {
+    result.players = summarizePlayers({
+      playerGoals, playerAssists, playerMinutes,
+      playerMatchesWithGoal, goldenBoot,
+      playerYellow, playerRed, playerSuspended,
+      iterations,
+    });
+  }
+  return result;
+}
+
+function aggregatePlayerEvents(r, agg) {
+  const perIterGoals = new Map();
+  const perIterYellow = new Map();
+  const perIterRed = new Map();
+  const tally = (events) => {
+    if (!events) return;
+    for (const name of events.scorersA) if (name) bumpName(agg.playerGoals, name);
+    for (const name of events.scorersB) if (name) bumpName(agg.playerGoals, name);
+    for (const name of events.assistsA) if (name) bumpName(agg.playerAssists, name);
+    for (const name of events.assistsB) if (name) bumpName(agg.playerAssists, name);
+    for (const bin of events.minutesA) if (bin) bumpBin(agg.playerMinutes, bin.label);
+    for (const bin of events.minutesB) if (bin) bumpBin(agg.playerMinutes, bin.label);
+    for (const name of events.scorersA) if (name) perIterGoals.set(name, (perIterGoals.get(name) || 0) + 1);
+    for (const name of events.scorersB) if (name) perIterGoals.set(name, (perIterGoals.get(name) || 0) + 1);
+    for (const name of (events.yellowsA || [])) if (name) {
+      bumpName(agg.playerYellow, name);
+      perIterYellow.set(name, (perIterYellow.get(name) || 0) + 1);
+    }
+    for (const name of (events.yellowsB || [])) if (name) {
+      bumpName(agg.playerYellow, name);
+      perIterYellow.set(name, (perIterYellow.get(name) || 0) + 1);
+    }
+    for (const name of (events.redsA || [])) if (name) {
+      bumpName(agg.playerRed, name);
+      perIterRed.set(name, (perIterRed.get(name) || 0) + 1);
+    }
+    for (const name of (events.redsB || [])) if (name) {
+      bumpName(agg.playerRed, name);
+      perIterRed.set(name, (perIterRed.get(name) || 0) + 1);
+    }
+  };
+  for (const m of r.groupMatches || []) tally(m.events);
+  for (const round of r.rounds || []) {
+    for (const m of round.matches || []) tally(m.events);
+  }
+  for (const name of perIterGoals.keys()) bumpName(agg.playerMatchesWithGoal, name);
+  // Suspension proxy: ≥2 yellow cards or ≥1 red card in this tournament.
+  // We don't simulate the "actually banned next match" dynamic; this is
+  // the at-risk probability.
+  const suspended = new Set();
+  for (const [name, n] of perIterYellow) if (n >= 2) suspended.add(name);
+  for (const name of perIterRed.keys()) suspended.add(name);
+  for (const name of suspended) bumpName(agg.playerSuspended, name);
+  let topGoals = 0;
+  for (const v of perIterGoals.values()) if (v > topGoals) topGoals = v;
+  if (topGoals > 0) {
+    for (const [name, g] of perIterGoals) {
+      if (g === topGoals) bumpName(agg.goldenBoot, name);
+    }
+  }
+}
+
+function bumpName(map, name) {
+  map.set(name, (map.get(name) || 0) + 1);
+}
+function bumpBin(map, label) {
+  map.set(label, (map.get(label) || 0) + 1);
+}
+
+function summarizePlayers({ playerGoals, playerAssists, playerMinutes, playerMatchesWithGoal, goldenBoot, playerYellow, playerRed, playerSuspended, iterations }) {
+  const out = {};
+  // Expected tournament goals/assists/cards per player = total / iterations.
+  // P(Golden Boot)  = sharedGoldenBootCount / iterations.
+  // P(suspended)    = iters where the player got ≥2 Y or ≥1 R.
+  const allNames = new Set([
+    ...playerGoals.keys(),
+    ...playerAssists.keys(),
+    ...goldenBoot.keys(),
+    ...(playerYellow ? playerYellow.keys() : []),
+    ...(playerRed ? playerRed.keys() : []),
+  ]);
+  const players = [];
+  for (const name of allNames) {
+    const goals = playerGoals.get(name) || 0;
+    const assists = playerAssists.get(name) || 0;
+    const matchesScored = playerMatchesWithGoal.get(name) || 0;
+    const gbCount = goldenBoot.get(name) || 0;
+    const yellow = playerYellow ? (playerYellow.get(name) || 0) : 0;
+    const red = playerRed ? (playerRed.get(name) || 0) : 0;
+    const suspended = playerSuspended ? (playerSuspended.get(name) || 0) : 0;
+    players.push({
+      name,
+      expGoals: goals / iterations,
+      expAssists: assists / iterations,
+      pGoldenBoot: gbCount / iterations,
+      pScoresAnyMatch: matchesScored / iterations,
+      expYellow: yellow / iterations,
+      expRed: red / iterations,
+      pSuspended: suspended / iterations,
+    });
+  }
+  players.sort((a, b) => b.expGoals - a.expGoals);
+  out.players = players;
+  // Minute distribution aggregated over all goals.
+  const minutes = {};
+  let totalGoalsAcrossPlayers = 0;
+  for (const [label, n] of playerMinutes) {
+    minutes[label] = n;
+    totalGoalsAcrossPlayers += n;
+  }
+  out.minuteDistribution = {};
+  for (const label of Object.keys(minutes)) {
+    out.minuteDistribution[label] = totalGoalsAcrossPlayers
+      ? minutes[label] / totalGoalsAcrossPlayers
+      : 0;
+  }
+  out.totalGoalsSampled = totalGoalsAcrossPlayers;
+  return out;
 }
 
 /* ─────────── Bootstrap-MC for parameter uncertainty ─────────── */

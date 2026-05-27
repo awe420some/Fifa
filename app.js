@@ -16,6 +16,8 @@ import { squadEloAdjustments } from "./models/squad.js";
 import { DEFAULT_WEIGHTS } from "./models/ensemble.js";
 import { aggregateMarket, deVig } from "./models/market.js";
 import { buildCovariateProvider } from "./predictor.js";
+import { PLAYERS_2026 } from "./data/players-2026.js";
+import { GOAL_MINUTE_BINS } from "./models/players.js";
 
 async function loadMarketSnapshot() {
   try {
@@ -43,6 +45,16 @@ async function loadSchedule() {
 async function loadTitleHistory() {
   try {
     const resp = await fetch("./data/title-history.json", { cache: "no-store" });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+async function loadPlayerProps() {
+  try {
+    const resp = await fetch("./data/player-props-2026.json", { cache: "no-store" });
     if (!resp.ok) return null;
     return await resp.json();
   } catch {
@@ -85,6 +97,9 @@ const state = {
   marketGamma: 1.0,
   bootstrap: false,
   bootstrapFits: null,
+  players: null,
+  playersComputing: false,
+  playersTeamFilter: "",
   options: {
     useHost: true,
     useSquad: true,
@@ -301,6 +316,115 @@ function renderMarket() {
   $("#market-summary").innerHTML = dict.correlation(r.toFixed(2));
 }
 
+/* ─────────── Team Market Matrix ─────────── */
+
+const MATRIX_STAGES = [
+  { key: "title",     modelKey: "titleProbability",         marketKey: "titleAggregated" },
+  { key: "finals",    modelKey: "finalsProbability",        marketKey: "finalsAggregated" },
+  { key: "semis",     modelKey: "semisProbability",         marketKey: "semisAggregated" },
+  { key: "quarters",  modelKey: "quartersProbability",      marketKey: "quartersAggregated" },
+  { key: "r16",       modelKey: "r16Probability",           marketKey: "r16Aggregated" },
+  { key: "groupWin",  modelKey: "groupPositionDistribution", marketKey: "groupWinnerAggregated" },
+  { key: "topTwo",    modelKey: "groupAdvanceProbability",  marketKey: "topTwoAggregated" },
+];
+
+let _matrixSort = { key: "title", dir: "diff" };  // diff | model | market
+
+function matrixModelValue(code, stage) {
+  const mc = state.mc;
+  if (stage.key === "groupWin") {
+    const gp = mc.groupPositionDistribution?.[code];
+    return gp && gp.total ? gp.p1 / gp.total : 0;
+  }
+  const m = mc[stage.modelKey];
+  if (!m) return 0;
+  return m[code] || 0;
+}
+
+function matrixMarketValue(code, stage) {
+  const snap = state.marketSnapshot;
+  // Title falls back to aggregated/MARKET_ODDS_2026 for backward-compat.
+  if (stage.key === "title") {
+    return (snap?.titleAggregated || snap?.aggregated || MARKET_ODDS_2026)[code] ?? null;
+  }
+  return snap?.[stage.marketKey]?.[code] ?? null;
+}
+
+function renderTeamMarketMatrix() {
+  const dict = t();
+  const cols = dict.matrixCols;
+  const rows = TEAMS_2026.map((team) => {
+    const row = { code: team.code, name: teamName(team.code), stages: {} };
+    for (const stage of MATRIX_STAGES) {
+      const model = matrixModelValue(team.code, stage);
+      const market = matrixMarketValue(team.code, stage);
+      const diff = market != null ? model - market : null;
+      row.stages[stage.key] = { model, market, diff };
+    }
+    return row;
+  });
+  const sortKey = _matrixSort.key;
+  const sortDir = _matrixSort.dir;
+  rows.sort((a, b) => {
+    const sa = a.stages[sortKey];
+    const sb = b.stages[sortKey];
+    if (sortDir === "diff") {
+      const da = sa?.diff;
+      const db = sb?.diff;
+      if (da == null && db == null) return (sb.model || 0) - (sa.model || 0);
+      if (da == null) return 1;
+      if (db == null) return -1;
+      return db - da;
+    }
+    return (sb.model || 0) - (sa.model || 0);
+  });
+  const renderDiff = (d) => {
+    if (d == null) return `<span class="muted">—</span>`;
+    const sign = d >= 0 ? "+" : "−";
+    const cls = d >= 0 ? "edge-up" : "edge-down";
+    return `<span class="${cls}">${sign}${(Math.abs(d) * 100).toFixed(1)}</span>`;
+  };
+  const headerCell = (key, label) => `
+    <th data-sort="${key}" class="${sortKey === key ? "sorted-desc" : ""}">${escape(label)}</th>
+  `;
+  $("#team-matrix").innerHTML = `
+    <table class="team-matrix">
+      <thead><tr>
+        <th>${escape(cols.team)}</th>
+        ${headerCell("title", cols.title)}
+        ${headerCell("finals", cols.finals)}
+        ${headerCell("semis", cols.semis)}
+        ${headerCell("quarters", cols.quarters)}
+        ${headerCell("r16", cols.r16)}
+        ${headerCell("groupWin", cols.groupWin)}
+        ${headerCell("topTwo", cols.topTwo)}
+      </tr></thead>
+      <tbody>${rows.map((row) => `
+        <tr>
+          <td class="team-name">${escape(row.name)}</td>
+          ${MATRIX_STAGES.map((stage) => {
+            const s = row.stages[stage.key];
+            return `<td>
+              <div class="matrix-cell">
+                <span class="mc-model">${pct(s.model, s.model < 0.01 ? 2 : 1)}</span>
+                <span class="mc-market">${s.market != null ? pct(s.market, s.market < 0.01 ? 2 : 1) : "n/v"}</span>
+                <span class="mc-diff">${renderDiff(s.diff)}</span>
+              </div>
+            </td>`;
+          }).join("")}
+        </tr>
+      `).join("")}</tbody>
+    </table>
+  `;
+  // Wire up header clicks for sorting.
+  $$("#team-matrix th[data-sort]").forEach((th) => {
+    th.addEventListener("click", () => {
+      _matrixSort = { key: th.dataset.sort, dir: "diff" };
+      renderTeamMarketMatrix();
+    });
+  });
+}
+
 function pearson(xs, ys) {
   const n = xs.length;
   const mx = xs.reduce((a, b) => a + b, 0) / n;
@@ -500,6 +624,9 @@ function setupScenarios() {
       recompute();
       renderAll();
       $("#dashboard").classList.remove("recomputing");
+      // If player tracking is on, the player projections are stale —
+      // refresh them with the new scenario.
+      if (state.players) await computePlayerMC();
     });
   });
   const bootstrapToggle = $("#bootstrap-toggle");
@@ -546,6 +673,25 @@ function setupScenarios() {
       recompute();
       renderAll();
       $("#dashboard").classList.remove("recomputing");
+    });
+  }
+  const playersToggle = $("#players-toggle");
+  if (playersToggle) {
+    playersToggle.addEventListener("change", async () => {
+      if (!playersToggle.checked) {
+        state.players = null;
+        $("#players-team-pick").hidden = true;
+        renderPlayers();
+        return;
+      }
+      await computePlayerMC();
+    });
+  }
+  const teamSel = $("#players-team-select");
+  if (teamSel) {
+    teamSel.addEventListener("change", () => {
+      state.playersTeamFilter = teamSel.value;
+      renderPlayers();
     });
   }
 }
@@ -667,6 +813,7 @@ async function bootstrap() {
   state.schedule = await loadSchedule();
   state.covariateProvider = state.schedule ? buildCovariateProvider(state.schedule) : null;
   state.titleHistory = await loadTitleHistory();
+  state.playerProps = await loadPlayerProps();
   // 1. Fit DC on ALL historical matches (group + KO across all years).
   state.dcParams = fitDCOnHistorical(HISTORICAL_KNOCKOUTS, HISTORICAL_ELO, NEW_HISTORICAL_MATCHES);
   // 2. Squad-strength deltas.
@@ -684,13 +831,233 @@ function renderAll() {
   renderDistribution();
   renderStages();
   renderMarket();
+  renderTeamMarketMatrix();
   renderGroups();
+  renderPlayers();
   renderBacktest();
   renderCalibration();
   renderHistoryFanChart();
   renderContext();
   renderMethodology();
   fireConfetti();
+}
+
+/* ─────────── Player predictions ─────────── */
+
+const playerToTeam = new Map();
+const teamCodeOf = (name) => playerToTeam.get(name) || "";
+for (const p of PLAYERS_2026) playerToTeam.set(p.name, p.code);
+
+function renderPlayers() {
+  const dict = t();
+  if (!state.players || !state.players.players) {
+    $("#players-table-wrap").hidden = true;
+    return;
+  }
+  $("#players-table-wrap").hidden = false;
+  const filter = state.playersTeamFilter;
+  const all = state.players.players;
+  const filtered = filter ? all.filter((r) => teamCodeOf(r.name) === filter) : all;
+  const cols = dict.playerCols;
+  const top = filtered.slice(0, 30);
+  const rowsHtml = top.map((row, i) => `
+    <tr>
+      <td>${i + 1}</td>
+      <td>${escape(row.name)}</td>
+      <td class="muted">${escape(teamName(teamCodeOf(row.name)) || "—")}</td>
+      <td class="num">${row.expGoals.toFixed(2)}</td>
+      <td class="num">${row.expAssists.toFixed(2)}</td>
+      <td class="num">${pct(row.pScoresAnyMatch, 1)}</td>
+      <td class="num">${pct(row.pGoldenBoot, 2)}</td>
+    </tr>
+  `).join("");
+  $("#players-table").innerHTML = `
+    <table class="stages-table">
+      <thead><tr>
+        <th>${escape(cols.rank)}</th>
+        <th>${escape(cols.name)}</th>
+        <th>${escape(cols.team)}</th>
+        <th>${escape(cols.expGoals)}</th>
+        <th>${escape(cols.expAssists)}</th>
+        <th>${escape(cols.pAny)}</th>
+        <th>${escape(cols.pBoot)}</th>
+      </tr></thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>
+  `;
+  // Top Golden Boot probabilities
+  const gb = all
+    .filter((r) => r.pGoldenBoot > 0.005)
+    .sort((a, b) => b.pGoldenBoot - a.pGoldenBoot)
+    .slice(0, 10);
+  const gbMax = gb[0]?.pGoldenBoot || 0.01;
+  $("#players-goldenboot").innerHTML = gb.map((r) => `
+    <div class="dist-row">
+      <div class="dist-team">${escape(r.name)} <span class="muted small">${escape(teamName(teamCodeOf(r.name)) || "—")}</span></div>
+      <div class="dist-bar"><div class="dist-fill" style="width:${(r.pGoldenBoot / gbMax) * 100}%"></div></div>
+      <div class="dist-prob">${pct(r.pGoldenBoot, 2)}</div>
+    </div>
+  `).join("");
+  // Cards section (yellow + red top-10)
+  renderPlayerCards();
+  // Player prop comparisons
+  renderPlayerPropMarket("topscorer");
+  renderPlayerPropMarket("anytime");
+  // Goal-minute heatmap
+  const md = state.players.minuteDistribution || {};
+  const maxBin = Math.max(...Object.values(md), 0.01);
+  $("#players-minutes").innerHTML = `
+    <div class="minute-grid">
+      ${GOAL_MINUTE_BINS.map((b) => {
+        const p = md[b.label] || 0;
+        const intensity = (p / maxBin).toFixed(3);
+        return `<div class="minute-cell" style="--p:${intensity}">
+          <div class="minute-label">${escape(b.label)}</div>
+          <div class="minute-val">${pct(p, 1)}</div>
+        </div>`;
+      }).join("")}
+    </div>
+    <p class="muted small">Sampled from ${state.players.totalGoalsSampled.toLocaleString()} goals across ${state.mc.iterations.toLocaleString()} simulated tournaments.</p>
+  `;
+}
+
+async function computePlayerMC() {
+  $("#dashboard").classList.add("recomputing");
+  await new Promise((r) => requestAnimationFrame(r));
+  // 8 000-iter MC with per-player goal allocation. We trade total
+  // iterations for player detail; the main 25 000-MC numbers stay in
+  // state.mc and still drive the headline title/stage tables.
+  const playerOpts = {
+    squadDelta: state.squadDelta,
+    dcParams: state.dcParams,
+    covariateProvider: state.covariateProvider,
+    weights: DEFAULT_WEIGHTS,
+    useHost: state.options.useHost,
+    useSquad: state.options.useSquad,
+    useDC: state.options.useDC,
+    useMarket: state.options.useMarket,
+    useCovariates: state.options.useCovariates,
+    trackPlayers: true,
+  };
+  const res = runEnsembleMonteCarlo(
+    TEAMS_2026, GROUPS_2026, hostCodes, ELO_2026,
+    playerOpts, 8000,
+  );
+  state.players = res.players;
+  $("#players-team-pick").hidden = false;
+  populatePlayersTeamSelect();
+  renderPlayers();
+  $("#dashboard").classList.remove("recomputing");
+}
+
+function renderPlayerCards() {
+  const dict = t();
+  const all = state.players?.players || [];
+  const byYellow = all
+    .filter((r) => r.expYellow > 0.05)
+    .slice()
+    .sort((a, b) => b.expYellow - a.expYellow)
+    .slice(0, 10);
+  if (byYellow.length === 0) {
+    $("#players-cards").innerHTML = `<p class="muted small">—</p>`;
+    return;
+  }
+  const cols = dict.playerCols;
+  $("#players-cards").innerHTML = `
+    <table class="stages-table">
+      <thead><tr>
+        <th>${escape(cols.rank)}</th>
+        <th>${escape(cols.name)}</th>
+        <th>${escape(cols.team)}</th>
+        <th>${escape(cols.yellow)}</th>
+        <th>${escape(cols.red)}</th>
+        <th>${escape(cols.suspended)}</th>
+      </tr></thead>
+      <tbody>${byYellow.map((row, i) => `
+        <tr>
+          <td>${i + 1}</td>
+          <td>${escape(row.name)}</td>
+          <td class="muted">${escape(teamName(teamCodeOf(row.name)) || "—")}</td>
+          <td class="num">${row.expYellow.toFixed(2)}</td>
+          <td class="num">${row.expRed.toFixed(3)}</td>
+          <td class="num">${pct(row.pSuspended, 1)}</td>
+        </tr>
+      `).join("")}</tbody>
+    </table>
+  `;
+}
+
+function renderPlayerPropMarket(kind) {
+  const dict = t();
+  const propData = state.playerProps?.[kind === "topscorer" ? "topScorer" : "anytimeScorer"] || {};
+  const containerId = kind === "topscorer" ? "#players-topscorer-market" : "#players-anytime-market";
+  const allPlayers = state.players?.players || [];
+  const modelKey = kind === "topscorer" ? "pGoldenBoot" : "pScoresAnyMatch";
+  const filter = state.playersTeamFilter;
+  // Build a row per player with model+market+diff. Filtered by team
+  // dropdown like the top-30 table.
+  const rows = allPlayers
+    .filter((r) => !filter || teamCodeOf(r.name) === filter)
+    .map((r) => {
+      const market = propData[r.name]?.aggregated ?? null;
+      const model = r[modelKey] || 0;
+      return {
+        name: r.name,
+        team: teamCodeOf(r.name),
+        model,
+        market,
+        diff: market != null ? model - market : null,
+      };
+    })
+    // Sort: players with market quotes first by |diff|, rest by model.
+    .sort((a, b) => {
+      if (a.market != null && b.market != null) return Math.abs(b.diff) - Math.abs(a.diff);
+      if (a.market != null) return -1;
+      if (b.market != null) return 1;
+      return b.model - a.model;
+    })
+    .slice(0, 25);
+  const cols = dict.propCols;
+  const formatDiff = (d) => {
+    if (d == null) return `<span class="muted">—</span>`;
+    const sign = d >= 0 ? "+" : "−";
+    const cls = d >= 0 ? "edge-up" : "edge-down";
+    return `<span class="${cls}">${sign}${(Math.abs(d) * 100).toFixed(1)} pp</span>`;
+  };
+  $(containerId).innerHTML = `
+    <table class="stages-table">
+      <thead><tr>
+        <th>${escape(cols.rank)}</th>
+        <th>${escape(cols.name)}</th>
+        <th>${escape(cols.team)}</th>
+        <th>${escape(cols.model)}</th>
+        <th>${escape(cols.market)}</th>
+        <th>${escape(cols.diff)}</th>
+      </tr></thead>
+      <tbody>${rows.map((r, i) => `
+        <tr>
+          <td>${i + 1}</td>
+          <td>${escape(r.name)}</td>
+          <td class="muted">${escape(teamName(r.team) || "—")}</td>
+          <td class="num">${pct(r.model, kind === "topscorer" ? 2 : 1)}</td>
+          <td class="num">${r.market != null ? pct(r.market, kind === "topscorer" ? 2 : 1) : `<span class="muted">n/v</span>`}</td>
+          <td class="num">${formatDiff(r.diff)}</td>
+        </tr>
+      `).join("")}</tbody>
+    </table>
+    <p class="muted small">${escape(dict.propDiffLegend)}</p>
+  `;
+}
+
+function populatePlayersTeamSelect() {
+  const sel = $("#players-team-select");
+  if (!sel) return;
+  const codes = [...new Set(PLAYERS_2026.map((p) => p.code))]
+    .map((c) => ({ c, name: teamName(c) }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  sel.innerHTML = `<option value="">— all —</option>` +
+    codes.map(({ c, name }) => `<option value="${c}">${escape(name)}</option>`).join("");
+  sel.value = state.playersTeamFilter;
 }
 
 function fireConfetti() {

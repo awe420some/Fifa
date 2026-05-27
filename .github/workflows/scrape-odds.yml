@@ -28,9 +28,14 @@ jobs:
           npm install playwright@1.56.1 --no-save --silent
           npx playwright install chromium --with-deps
 
-      - name: Run scraper
+      - name: Run team-odds scraper
         id: scrape
         run: node scripts/scrape-bookmakers.mjs
+        continue-on-error: true
+
+      - name: Run player-prop scraper
+        id: props
+        run: node scripts/scrape-player-props.mjs
         continue-on-error: true
 
       - name: Run forecast snapshot
@@ -39,18 +44,18 @@ jobs:
         continue-on-error: true
 
       - name: Commit snapshots if changed
-        if: steps.scrape.outcome == 'success' || steps.forecast.outcome == 'success'
+        if: steps.scrape.outcome == 'success' || steps.props.outcome == 'success' || steps.forecast.outcome == 'success'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           changed=0
-          for f in data/market-snapshot.json data/title-history.json; do
+          for f in data/market-snapshot.json data/player-props-2026.json data/title-history.json; do
             if [ -f "$f" ] && ! git diff --quiet "$f"; then
               git add "$f"; changed=1
             fi
           done
           if [ "$changed" = "1" ]; then
-            git commit -m "Refresh odds + forecast snapshot ($(date -u +%Y-%m-%d))"
+            git commit -m "Refresh odds + props + forecast snapshot ($(date -u +%Y-%m-%d))"
             git push
           else
             echo "No changes to commit."
