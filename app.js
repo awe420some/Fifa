@@ -1118,5 +1118,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     $("#loading").hidden = true;
     $("#dashboard").hidden = false;
     renderAll();
+    // Auto-run the per-player MC so players/cards/markets show up
+    // immediately without the user having to flip a toggle.
+    const playersToggle = $("#players-toggle");
+    if (playersToggle) {
+      playersToggle.checked = true;
+      await computePlayerMC();
+    }
   });
 });
