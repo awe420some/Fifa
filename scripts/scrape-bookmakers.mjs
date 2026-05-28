@@ -286,16 +286,17 @@ const titleAggregated = aggregate(sources);
 // group endpoint is down.
 let groupWinnerAggregated = {};
 let groupSources = [];
+const gwBrowser = await chromium.launch();
 try {
-  const gwBrowser = await chromium.launch();
   const gwRes = await withinTimeout(scrapeGroupWinnersPolymarket(gwBrowser), PER_SOURCE_TIMEOUT_MS, "Polymarket-groups");
-  await gwBrowser.close();
   groupSources = [{ name: gwRes.source, url: gwRes.url, teams: Object.keys(gwRes.odds).length, odds: gwRes.odds }];
   groupWinnerAggregated = aggregate(groupSources);
   console.log(`✓ Polymarket (groups): ${Object.keys(gwRes.odds).length} teams`);
 } catch (err) {
   console.log(`✗ Polymarket (groups): ${err.message}`);
   unreachable.push({ name: "Polymarket (groups)", reason: err.message });
+} finally {
+  await gwBrowser.close();
 }
 
 const snapshot = {
