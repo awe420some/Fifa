@@ -131,6 +131,7 @@ const state = {
   livePolling: null,            // setInterval handle
   liveAbort: null,              // AbortController for in-flight fetch
   refreshing: false,            // refresh-button spinner gate
+  liveOverride: false,          // force live-polling regardless of schedule window
   // Single-open explainer slots — one per surface
   expandedTeam: null,
   expandedStage: null,
@@ -1296,6 +1297,9 @@ function buildCombinedTournaments() {
 }
 
 async function bootstrap() {
+  // Restore manual live-override from localStorage so polling can start
+  // immediately on reload without waiting for the user to flip the toggle.
+  try { state.liveOverride = localStorage.getItem("wc26_live_override") === "1"; } catch {}
   const combined = buildCombinedTournaments();
   state.marketSnapshot = await loadMarketSnapshot();
   const rawMarket = state.marketSnapshot?.aggregated || MARKET_ODDS_2026;
@@ -1434,12 +1438,32 @@ function renderFreshnessBanner() {
   if (liveStatusEl) {
     let txt = "";
     let cls = "";
-    if (state.live?.status === "no-source") txt = fb.liveNoSource || "Live-Mode pending — no source configured yet";
-    else if (state.livePolling) { txt = fb.liveActive || "Live · matches in progress"; cls = "active"; }
-    else if (liveWindowActive()) { txt = fb.liveActive || "Live"; cls = "active"; }
-    else txt = fb.liveIdle || "";
+    if (state.liveOverride && state.live?.status === "no-source") {
+      txt = fb.liveOverrideNoSource || "Live-Mode forced (no source yet — set LIVE_PROVIDER + LIVE_API_KEY in Vercel)";
+    } else if (state.live?.status === "no-source") {
+      txt = fb.liveNoSource || "Live-Mode pending — no source configured yet";
+    } else if (state.live?.status === "ok" && state.live?.matches?.some?.((m) => m.status === "live")) {
+      txt = fb.liveActive || "Live · matches in progress";
+      cls = "active";
+    } else if (state.livePolling) {
+      txt = fb.livePolling || "Polling /api/live · waiting for kickoff";
+      cls = "active";
+    } else if (liveWindowActive()) {
+      txt = fb.liveActive || "Live";
+      cls = "active";
+    } else {
+      txt = fb.liveIdle || "";
+    }
     liveStatusEl.textContent = txt;
     liveStatusEl.classList.toggle("active", cls === "active");
+  }
+  // Live-mode toggle button
+  const liveBtn = $("#fb-live-toggle");
+  if (liveBtn) {
+    liveBtn.textContent = state.liveOverride
+      ? (fb.liveToggleStop || "Live-Mode stoppen")
+      : (fb.liveToggleStart || "Live-Mode aktivieren");
+    liveBtn.classList.toggle("active", !!state.liveOverride);
   }
 }
 
@@ -1478,10 +1502,30 @@ function wireRefreshButton() {
     renderAll();
     startLivePollingIfActive();
   });
+  // Live-mode override toggle: flip state, persist, restart polling, fetch
+  // an immediate /api/live snapshot so the banner reflects the new state.
+  const liveBtn = $("#fb-live-toggle");
+  if (liveBtn && !liveBtn.dataset.wired) {
+    liveBtn.dataset.wired = "1";
+    liveBtn.addEventListener("click", async () => {
+      state.liveOverride = !state.liveOverride;
+      try {
+        localStorage.setItem("wc26_live_override", state.liveOverride ? "1" : "0");
+      } catch { /* quota */ }
+      startLivePollingIfActive();
+      if (state.liveOverride) {
+        // Trigger one immediate fetch so the banner updates right away.
+        const live = await loadLive().catch(() => null);
+        if (live) state.live = live;
+      }
+      renderFreshnessBanner();
+    });
+  }
 }
 
 // Predicate: any scheduled match where now is between kickoff and kickoff+2h.
 function liveWindowActive() {
+  if (state.liveOverride) return true;   // manual override forces polling
   if (!state.schedule) return false;
   const now = Date.now();
   const twoHours = 2 * 3600 * 1000;
