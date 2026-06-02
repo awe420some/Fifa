@@ -111,7 +111,15 @@
           </label>
         </div>
         <div id="players-table-wrap" hidden>
-          <h4 data-i18n="playersTopScorers">Top 30 expected scorers</h4>
+          <h4 data-i18n="playersAllPlayers">All players (1163)</h4>
+          <div class="mega-controls">
+            <input id="players-search" type="search" data-i18n-placeholder="playersSearch" placeholder="Search name or club…">
+            <label class="gamma-pick"><span data-i18n="playersPosFilter">Position</span>
+              <select id="players-pos-select"></select></label>
+            <label class="gamma-pick"><span data-i18n="playersLeagueFilter">League</span>
+              <select id="players-league-select"></select></label>
+          </div>
+          <div id="players-compare" class="compare-tray" hidden></div>
           <div id="players-table"></div>
           <h4 data-i18n="playersGoldenBoot">Golden Boot probability</h4>
           <div id="players-goldenboot"></div>

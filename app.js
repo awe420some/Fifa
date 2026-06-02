@@ -16,8 +16,8 @@ import { squadEloAdjustments } from "./models/squad.js";
 import { DEFAULT_WEIGHTS } from "./models/ensemble.js";
 import { aggregateMarket, deVig } from "./models/market.js";
 import { buildCovariateProvider } from "./predictor.js";
-import { PLAYERS_2026 } from "./data/players-2026.js";
-import { GOAL_MINUTE_BINS } from "./models/players.js";
+import { PLAYERS_2026, BIG5_LEAGUES } from "./data/players-2026.js";
+import { GOAL_MINUTE_BINS, DEFAULT_MIN_SHARE, LEAGUE_STRENGTH, teamScoringShares } from "./models/players.js";
 
 async function loadMarketSnapshot() {
   try {
@@ -100,6 +100,16 @@ const state = {
   players: null,
   playersComputing: false,
   playersTeamFilter: "",
+  playerProps: null,
+  // Mega-table state
+  megaSort: { key: "expGoals", dir: "desc" },
+  megaSearch: "",
+  megaPos: "",
+  megaLeague: "",
+  expandedPlayer: null,
+  comparePins: [],
+  playerRowsCache: null,      // memoized buildPlayerRows output
+  playerRowsCacheKey: null,   // identity of state.players it was built from
   options: {
     useHost: true,
     useSquad: true,
@@ -128,6 +138,10 @@ function applyI18n() {
   $$("[data-i18n]").forEach((el) => {
     const key = el.getAttribute("data-i18n");
     if (typeof dict[key] === "string") el.textContent = dict[key];
+  });
+  $$("[data-i18n-placeholder]").forEach((el) => {
+    const key = el.getAttribute("data-i18n-placeholder");
+    if (typeof dict[key] === "string") el.setAttribute("placeholder", dict[key]);
   });
   document.title = dict.title;
   $("#snapshot-line").textContent = dict.snapshot(ELO_2026_META.asOf);
@@ -691,9 +705,84 @@ function setupScenarios() {
   if (teamSel) {
     teamSel.addEventListener("change", () => {
       state.playersTeamFilter = teamSel.value;
-      renderPlayers();
+      if (state.players) renderPlayers();
     });
   }
+  // Mega-table search (debounced) + position/league filters.
+  const searchInput = $("#players-search");
+  if (searchInput) {
+    let deb = null;
+    searchInput.addEventListener("input", () => {
+      clearTimeout(deb);
+      deb = setTimeout(() => {
+        state.megaSearch = searchInput.value;
+        if (state.players) renderPlayerMegaTable();
+      }, 120);
+    });
+  }
+  const posSel = $("#players-pos-select");
+  if (posSel) {
+    posSel.addEventListener("change", () => {
+      state.megaPos = posSel.value;
+      if (state.players) renderPlayerMegaTable();
+    });
+  }
+  const leagueSel = $("#players-league-select");
+  if (leagueSel) {
+    leagueSel.addEventListener("change", () => {
+      state.megaLeague = leagueSel.value;
+      if (state.players) renderPlayerMegaTable();
+    });
+  }
+  // Delegated clicks on the mega-table: header sort, pin checkbox, row expand.
+  const megaWrap = $("#players-table");
+  if (megaWrap) {
+    megaWrap.addEventListener("click", (e) => {
+      const th = e.target.closest("th[data-sort]");
+      if (th) {
+        const key = th.dataset.sort;
+        if (key === "rank") return;
+        if (state.megaSort.key === key) {
+          state.megaSort.dir = state.megaSort.dir === "asc" ? "desc" : "asc";
+        } else {
+          state.megaSort = { key, dir: "desc" };
+        }
+        renderPlayerMegaTable();
+        return;
+      }
+      if (e.target.classList.contains("pin-box")) {
+        const name = e.target.dataset.player;
+        togglePin(name, e.target.checked);
+        return;
+      }
+      const row = e.target.closest("tr.player-row");
+      if (row) {
+        const name = row.dataset.player;
+        state.expandedPlayer = state.expandedPlayer === name ? null : name;
+        renderPlayerMegaTable();
+      }
+    });
+  }
+  // Compare-tray remove buttons.
+  const tray = $("#players-compare");
+  if (tray) {
+    tray.addEventListener("click", (e) => {
+      const btn = e.target.closest(".compare-pin-remove");
+      if (btn) togglePin(btn.dataset.player, false);
+    });
+  }
+}
+
+function togglePin(name, on) {
+  const idx = state.comparePins.indexOf(name);
+  if (on && idx === -1) {
+    if (state.comparePins.length >= 4) return;  // cap at 4
+    state.comparePins.push(name);
+  } else if (!on && idx !== -1) {
+    state.comparePins.splice(idx, 1);
+  }
+  renderPlayerMegaTable();
+  renderCompareTray();
 }
 
 function renderHistoryFanChart() {
@@ -849,42 +938,16 @@ const teamCodeOf = (name) => playerToTeam.get(name) || "";
 for (const p of PLAYERS_2026) playerToTeam.set(p.name, p.code);
 
 function renderPlayers() {
-  const dict = t();
   if (!state.players || !state.players.players) {
     $("#players-table-wrap").hidden = true;
     return;
   }
   $("#players-table-wrap").hidden = false;
-  const filter = state.playersTeamFilter;
   const all = state.players.players;
-  const filtered = filter ? all.filter((r) => teamCodeOf(r.name) === filter) : all;
-  const cols = dict.playerCols;
-  const top = filtered.slice(0, 30);
-  const rowsHtml = top.map((row, i) => `
-    <tr>
-      <td>${i + 1}</td>
-      <td>${escape(row.name)}</td>
-      <td class="muted">${escape(teamName(teamCodeOf(row.name)) || "—")}</td>
-      <td class="num">${row.expGoals.toFixed(2)}</td>
-      <td class="num">${row.expAssists.toFixed(2)}</td>
-      <td class="num">${pct(row.pScoresAnyMatch, 1)}</td>
-      <td class="num">${pct(row.pGoldenBoot, 2)}</td>
-    </tr>
-  `).join("");
-  $("#players-table").innerHTML = `
-    <table class="stages-table">
-      <thead><tr>
-        <th>${escape(cols.rank)}</th>
-        <th>${escape(cols.name)}</th>
-        <th>${escape(cols.team)}</th>
-        <th>${escape(cols.expGoals)}</th>
-        <th>${escape(cols.expAssists)}</th>
-        <th>${escape(cols.pAny)}</th>
-        <th>${escape(cols.pBoot)}</th>
-      </tr></thead>
-      <tbody>${rowsHtml}</tbody>
-    </table>
-  `;
+  // Full sortable/filterable mega-table of all 1163 players.
+  populatePlayerFilterSelects();
+  renderPlayerMegaTable();
+  renderCompareTray();
   // Top Golden Boot probabilities
   const gb = all
     .filter((r) => r.pGoldenBoot > 0.005)
@@ -919,6 +982,343 @@ function renderPlayers() {
     </div>
     <p class="muted small">Sampled from ${state.players.totalGoalsSampled.toLocaleString()} goals across ${state.mc.iterations.toLocaleString()} simulated tournaments.</p>
   `;
+}
+
+/* ─────────── Per-player mega-table ─────────── */
+
+// Lazily-built per-team fallback flags (does the team use position-default
+// goal shares because it has <3 Big-5 players?).
+let _teamFallbackCache = null;
+function teamUsesFallback(code) {
+  if (!_teamFallbackCache) {
+    _teamFallbackCache = new Map();
+    const seen = new Set(PLAYERS_2026.map((p) => p.code));
+    for (const c of seen) {
+      const shares = teamScoringShares(c, "goal");
+      _teamFallbackCache.set(c, shares ? !!shares.fallback : true);
+    }
+  }
+  return _teamFallbackCache.get(code) || false;
+}
+
+// Master roster join: all 1163 PLAYERS_2026 left-joined with the sparse MC
+// output. Memoized on state.players identity.
+function buildPlayerRows() {
+  if (state.playerRowsCache && state.playerRowsCacheKey === state.players) {
+    return state.playerRowsCache;
+  }
+  const mcByName = new Map();
+  for (const p of state.players.players) mcByName.set(p.name, p);
+  const rows = PLAYERS_2026.map((p) => {
+    const mc = mcByName.get(p.name) || null;
+    const hasGoalBasis = p.npxG90 != null;
+    const sampledGoals = mc?.goalDist?.sampled ?? 0;
+    return {
+      name: p.name,
+      code: p.code,
+      team: teamName(p.code),
+      pos: p.pos,
+      club: p.club,
+      league: p.league,
+      captain: !!p.captain,
+      notes: p.notes || "",
+      npxG90: p.npxG90,
+      xA90: p.xA90,
+      minShare: DEFAULT_MIN_SHARE[p.pos] ?? null,
+      leagueStrength: LEAGUE_STRENGTH[p.league] ?? LEAGUE_STRENGTH.Other,
+      fallback: teamUsesFallback(p.code),
+      isBig5: BIG5_LEAGUES.has(p.league),
+      expGoals: mc?.expGoals ?? 0,
+      expAssists: mc?.expAssists ?? 0,
+      pScoresAnyMatch: mc?.pScoresAnyMatch ?? 0,
+      pGoldenBoot: mc?.pGoldenBoot ?? 0,
+      expYellow: mc?.expYellow ?? 0,
+      expRed: mc?.expRed ?? 0,
+      pSuspended: mc?.pSuspended ?? 0,
+      goalDist: mc?.goalDist ?? null,
+      minuteBins: mc?.minuteBins ?? {},
+      hasGoalBasis,
+      sampledGoals,
+      // A goal metric is "n/v" when there's no xG basis AND the player never
+      // got a sampled goal (truly no information). Fallback-team players get
+      // position-default sampled goals, so they show real numbers.
+      goalNv: !hasGoalBasis && sampledGoals === 0,
+    };
+  });
+  state.playerRowsCache = rows;
+  state.playerRowsCacheKey = state.players;
+  return rows;
+}
+
+// Column definitions for the mega-table. `num` = numeric sort; `nvGoal` =
+// shows n/v when row.goalNv; `fmt` renders the cell value.
+const MEGA_COLS = [
+  { key: "name",            type: "str",  cls: "" },
+  { key: "team",            type: "str",  cls: "muted" },
+  { key: "pos",             type: "str",  cls: "muted" },
+  { key: "club",            type: "str",  cls: "muted" },
+  { key: "league",          type: "str",  cls: "muted" },
+  { key: "npxG90",          type: "num",  cls: "num", fmt: (r) => r.npxG90 == null ? nv() : r.npxG90.toFixed(2) },
+  { key: "xA90",            type: "num",  cls: "num", fmt: (r) => r.xA90 == null ? nv() : r.xA90.toFixed(2) },
+  { key: "expGoals",        type: "num",  cls: "num", nvGoal: true, fmt: (r) => r.expGoals.toFixed(2) },
+  { key: "expAssists",      type: "num",  cls: "num", nvGoal: true, fmt: (r) => r.expAssists.toFixed(2) },
+  { key: "pScoresAnyMatch", type: "num",  cls: "num", nvGoal: true, fmt: (r) => pct(r.pScoresAnyMatch, 1) },
+  { key: "pGoldenBoot",     type: "num",  cls: "num", nvGoal: true, fmt: (r) => pct(r.pGoldenBoot, 2) },
+  { key: "p0",              type: "num",  cls: "num", nvGoal: true, fmt: (r) => r.goalDist ? pct(r.goalDist.p0, 1) : nv() },
+  { key: "p2plus",          type: "num",  cls: "num", nvGoal: true, fmt: (r) => r.goalDist ? pct(r.goalDist.p2plus, 1) : nv() },
+  { key: "expYellow",       type: "num",  cls: "num", fmt: (r) => r.expYellow.toFixed(2) },
+  { key: "expRed",          type: "num",  cls: "num", fmt: (r) => r.expRed.toFixed(3) },
+  { key: "pSuspended",      type: "num",  cls: "num", fmt: (r) => pct(r.pSuspended, 1) },
+];
+
+function nv() { return `<span class="muted nv">n/v</span>`; }
+
+// Sort value for a column key; null/n-v sort to the end regardless of dir.
+function megaSortVal(row, key) {
+  switch (key) {
+    case "name": return row.name;
+    case "team": return row.team;
+    case "pos": return row.pos;
+    case "club": return row.club;
+    case "league": return row.league;
+    case "npxG90": return row.npxG90;
+    case "xA90": return row.xA90;
+    case "p0": return row.goalDist ? row.goalDist.p0 : null;
+    case "p2plus": return row.goalDist ? row.goalDist.p2plus : null;
+    default: return row[key];
+  }
+}
+
+function filteredSortedRows() {
+  const rows = buildPlayerRows();
+  const q = state.megaSearch.trim().toLowerCase();
+  const pos = state.megaPos;
+  const league = state.megaLeague;
+  const team = state.playersTeamFilter;
+  let out = rows.filter((r) => {
+    if (team && r.code !== team) return false;
+    if (pos && r.pos !== pos) return false;
+    if (league && r.league !== league) return false;
+    if (q && !(r.name.toLowerCase().includes(q) || r.club.toLowerCase().includes(q))) return false;
+    return true;
+  });
+  const { key, dir } = state.megaSort;
+  const mult = dir === "asc" ? 1 : -1;
+  const col = MEGA_COLS.find((c) => c.key === key);
+  const isStr = col && col.type === "str";
+  out = out.slice().sort((a, b) => {
+    const va = megaSortVal(a, key);
+    const vb = megaSortVal(b, key);
+    const na = va == null, nb = vb == null;
+    if (na && nb) return a.name.localeCompare(b.name);
+    if (na) return 1;   // nulls always last
+    if (nb) return -1;
+    if (isStr) return mult * String(va).localeCompare(String(vb));
+    return mult * (va - vb);
+  });
+  return out;
+}
+
+function megaTbodyHtml(rows) {
+  return rows.map((r, i) => {
+    const pinned = state.comparePins.includes(r.name);
+    const expanded = state.expandedPlayer === r.name;
+    const cells = MEGA_COLS.map((c) => {
+      const showNv = c.nvGoal && r.goalNv;
+      const val = showNv ? nv() : (c.fmt ? c.fmt(r) : escape(String(r[c.key] ?? "")));
+      const cap = c.key === "name" && r.captain ? ` <span class="cap-badge" title="Captain">C</span>` : "";
+      const fb = c.key === "name" && r.fallback && r.isBig5 === false ? "" : "";
+      return `<td class="${c.cls}">${val}${cap}${fb}</td>`;
+    }).join("");
+    return `<tr class="player-row${expanded ? " expanded" : ""}" data-player="${escape(r.name)}">
+      <td class="pin-cell"><input type="checkbox" class="pin-box" data-player="${escape(r.name)}"${pinned ? " checked" : ""}></td>
+      <td class="num">${i + 1}</td>
+      ${cells}
+    </tr>${expanded ? renderPlayerDetailRow(r) : ""}`;
+  }).join("");
+}
+
+function renderPlayerMegaTable() {
+  const dict = t();
+  const cols = dict.playerCols;
+  const rows = filteredSortedRows();
+  const { key, dir } = state.megaSort;
+  const sortCls = (k) => k === key ? (dir === "asc" ? "sorted-asc" : "sorted-desc") : "";
+  const labelFor = {
+    name: cols.name, team: cols.team, pos: cols.pos, club: cols.club, league: cols.league,
+    npxG90: cols.npxg, xA90: cols.xa, expGoals: cols.expGoals, expAssists: cols.expAssists,
+    pScoresAnyMatch: cols.pAny, pGoldenBoot: cols.pBoot, p0: cols.p0, p2plus: cols.p2plus,
+    expYellow: cols.yellow, expRed: cols.red, pSuspended: cols.suspended,
+  };
+  const headCells = MEGA_COLS.map((c) =>
+    `<th data-sort="${c.key}" class="${sortCls(c.key)}">${escape(labelFor[c.key] || c.key)}</th>`
+  ).join("");
+  const totalCols = MEGA_COLS.length + 2;
+  $("#players-table").innerHTML = `
+    <p class="muted small">${escape(dict.playersMegaHint || "")} <strong>${rows.length}</strong></p>
+    <div class="mega-scroll">
+      <table class="team-matrix mega-table">
+        <thead><tr>
+          <th class="pin-col">${escape(cols.pin || "≡")}</th>
+          <th data-sort="rank">#</th>
+          ${headCells}
+        </tr></thead>
+        <tbody>${megaTbodyHtml(rows)}</tbody>
+      </table>
+    </div>
+  `;
+  $("#players-table").dataset.totalCols = String(totalCols);
+}
+
+function renderPlayerDetailRow(r) {
+  const dict = t();
+  const d = dict.detailLabels || {};
+  const totalCols = MEGA_COLS.length + 2;
+  // Model inputs
+  const inputs = `
+    <div class="detail-block">
+      <h5>${escape(d.modelInputs || "Model inputs")}</h5>
+      <ul class="detail-list">
+        <li><span>npxG/90</span><b>${r.npxG90 == null ? nv() : r.npxG90.toFixed(2)}</b></li>
+        <li><span>xA/90</span><b>${r.xA90 == null ? nv() : r.xA90.toFixed(2)}</b></li>
+        <li><span>${escape(d.minShare || "Minute share")}</span><b>${r.minShare == null ? "—" : r.minShare.toFixed(2)}</b></li>
+        <li><span>${escape(d.leagueStrength || "League strength")}</span><b>${r.leagueStrength.toFixed(2)}</b></li>
+        <li><span>Club</span><b>${escape(r.club)}</b></li>
+        <li><span>Liga</span><b>${escape(r.league)}</b></li>
+      </ul>
+      ${r.fallback && !r.isBig5 ? `<p class="muted small pos-default-note">${escape(d.fallbackNote || "Position-default weights")}</p>` : ""}
+      ${r.goalNv ? `<p class="muted small">${escape(d.nvGoals || "n/v — no xG basis")}</p>` : ""}
+    </div>`;
+  // Goal-count distribution
+  let goalDistBlock;
+  if (r.goalDist && !r.goalNv) {
+    const gd = r.goalDist;
+    const bars = [
+      { lab: "P(0)", v: gd.p0 },
+      { lab: "P(1)", v: gd.p1 },
+      { lab: "P(≥2)", v: gd.p2plus },
+      { lab: d.hat || "P(hat-trick)", v: gd.pHat },
+    ];
+    const mx = Math.max(...bars.map((b) => b.v), 0.01);
+    goalDistBlock = `
+      <div class="detail-block">
+        <h5>${escape(d.goalDist || "Goal-count distribution")}</h5>
+        ${bars.map((b) => `
+          <div class="dist-row">
+            <div class="dist-team">${escape(b.lab)}</div>
+            <div class="dist-bar"><div class="dist-fill" style="width:${(b.v / mx) * 100}%"></div></div>
+            <div class="dist-prob">${pct(b.v, 1)}</div>
+          </div>`).join("")}
+      </div>`;
+  } else {
+    goalDistBlock = `<div class="detail-block"><h5>${escape(d.goalDist || "Goal-count distribution")}</h5><p class="muted small">${nv()}</p></div>`;
+  }
+  // Per-player minute heatmap
+  const mb = r.minuteBins || {};
+  const hasMin = Object.keys(mb).length > 0;
+  const mbMax = hasMin ? Math.max(...Object.values(mb), 0.01) : 0.01;
+  const minuteBlock = `
+    <div class="detail-block">
+      <h5>${escape(d.minuteDist || "This player's goal-time profile")}</h5>
+      ${hasMin ? `<div class="minute-grid">
+        ${GOAL_MINUTE_BINS.map((b) => {
+          const p = mb[b.label] || 0;
+          return `<div class="minute-cell" style="--p:${(p / mbMax).toFixed(3)}">
+            <div class="minute-label">${escape(b.label)}</div>
+            <div class="minute-val">${pct(p, 0)}</div>
+          </div>`;
+        }).join("")}
+      </div>` : `<p class="muted small">${nv()}</p>`}
+    </div>`;
+  // Market comparison for this player
+  const ts = state.playerProps?.topScorer?.[r.name]?.aggregated ?? null;
+  const as = state.playerProps?.anytimeScorer?.[r.name]?.aggregated ?? null;
+  const diffSpan = (model, market) => {
+    if (market == null) return `<span class="muted">n/v</span>`;
+    const dd = model - market;
+    const sign = dd >= 0 ? "+" : "−";
+    return `<span class="${dd >= 0 ? "edge-up" : "edge-down"}">${sign}${(Math.abs(dd) * 100).toFixed(1)} pp</span>`;
+  };
+  const marketBlock = `
+    <div class="detail-block">
+      <h5>${escape(d.marketComp || "Market comparison")}</h5>
+      <ul class="detail-list">
+        <li><span>Top scorer</span><b>${r.goalNv ? nv() : pct(r.pGoldenBoot, 2)} ${ts != null ? `· ${pct(ts, 2)} ${diffSpan(r.pGoldenBoot, ts)}` : "· n/v"}</b></li>
+        <li><span>Anytime</span><b>${r.goalNv ? nv() : pct(r.pScoresAnyMatch, 1)} ${as != null ? `· ${pct(as, 1)} ${diffSpan(r.pScoresAnyMatch, as)}` : "· n/v"}</b></li>
+      </ul>
+    </div>`;
+  return `<tr class="player-detail"><td colspan="${totalCols}">
+    <div class="detail-grid">${inputs}${goalDistBlock}${minuteBlock}${marketBlock}</div>
+  </td></tr>`;
+}
+
+function renderCompareTray() {
+  const dict = t();
+  const c = dict.compareLabels || {};
+  const tray = $("#players-compare");
+  if (!tray) return;
+  if (state.comparePins.length === 0) {
+    tray.hidden = true;
+    tray.innerHTML = "";
+    return;
+  }
+  tray.hidden = false;
+  const rows = buildPlayerRows();
+  const pinned = state.comparePins
+    .map((name) => rows.find((r) => r.name === name))
+    .filter(Boolean);
+  const metricRows = [
+    { lab: dict.playerCols.expGoals, fmt: (r) => r.goalNv ? nv() : r.expGoals.toFixed(2) },
+    { lab: dict.playerCols.expAssists, fmt: (r) => r.goalNv ? nv() : r.expAssists.toFixed(2) },
+    { lab: dict.playerCols.pAny, fmt: (r) => r.goalNv ? nv() : pct(r.pScoresAnyMatch, 1) },
+    { lab: dict.playerCols.pBoot, fmt: (r) => r.goalNv ? nv() : pct(r.pGoldenBoot, 2) },
+    { lab: dict.playerCols.p0, fmt: (r) => r.goalDist && !r.goalNv ? pct(r.goalDist.p0, 1) : nv() },
+    { lab: dict.playerCols.p2plus, fmt: (r) => r.goalDist && !r.goalNv ? pct(r.goalDist.p2plus, 1) : nv() },
+    { lab: (dict.detailLabels?.hat) || "P(hat-trick)", fmt: (r) => r.goalDist && !r.goalNv ? pct(r.goalDist.pHat, 1) : nv() },
+    { lab: dict.playerCols.yellow, fmt: (r) => r.expYellow.toFixed(2) },
+    { lab: dict.playerCols.red, fmt: (r) => r.expRed.toFixed(3) },
+    { lab: dict.playerCols.suspended, fmt: (r) => pct(r.pSuspended, 1) },
+    { lab: dict.playerCols.npxg, fmt: (r) => r.npxG90 == null ? nv() : r.npxG90.toFixed(2) },
+    { lab: dict.playerCols.xa, fmt: (r) => r.xA90 == null ? nv() : r.xA90.toFixed(2) },
+  ];
+  tray.innerHTML = `
+    <div class="compare-head">
+      <strong>${escape(c.title || "Compare players")}</strong>
+    </div>
+    <div class="mega-scroll">
+      <table class="team-matrix compare-table">
+        <thead><tr>
+          <th></th>
+          ${pinned.map((r) => `<th>${escape(r.name)}<br><span class="muted small">${escape(r.team)}</span>
+            <button class="compare-pin-remove" data-player="${escape(r.name)}" title="${escape(c.remove || "Remove")}">×</button></th>`).join("")}
+        </tr></thead>
+        <tbody>
+          ${metricRows.map((m) => `<tr>
+            <td class="metric-label">${escape(m.lab)}</td>
+            ${pinned.map((r) => `<td class="num">${m.fmt(r)}</td>`).join("")}
+          </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function populatePlayerFilterSelects() {
+  const dict = t();
+  const posSel = $("#players-pos-select");
+  if (posSel && !posSel.dataset.filled) {
+    const positions = ["GK", "DEF", "MID", "FW"];
+    posSel.innerHTML = `<option value="">${escape(dict.playersPosAll || "— all —")}</option>` +
+      positions.map((p) => `<option value="${p}">${p}</option>`).join("");
+    posSel.dataset.filled = "1";
+  }
+  const leagueSel = $("#players-league-select");
+  if (leagueSel && !leagueSel.dataset.filled) {
+    const leagues = [...new Set(PLAYERS_2026.map((p) => p.league))].sort();
+    leagueSel.innerHTML = `<option value="">${escape(dict.playersLeagueAll || "— all —")}</option>` +
+      leagues.map((l) => `<option value="${escape(l)}">${escape(l)}</option>`).join("");
+    leagueSel.dataset.filled = "1";
+  }
 }
 
 async function computePlayerMC() {

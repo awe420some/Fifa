@@ -388,6 +388,39 @@ top-scorer projections — even though they will still affect the team's
 expected-goal generation indirectly via Elo / Dixon-Coles. The model
 chooses honesty over completeness here.
 
+### 5f.1 Per-player drill-down (full 1163-player table)
+
+The UI exposes a sortable / filterable table of **all 1163 squad
+players**, each row expandable into a detail panel. Two extra
+per-player distributions are tracked inside the same Monte-Carlo:
+
+- **Per-player goal-minute profile.** `scorersA[i]` and `minutesA[i]`
+  are parallel arrays in the match sampler, so each sampled goal is
+  attributed to its scorer's minute bin. The per-player profile is
+  normalised over that player's own sampled goals. Note this is an
+  *honest aggregate of the global timing prior* (the same empirical
+  WC-1994–2022 bins from §5f), not a player-specific timing skill —
+  it answers "given this player's goals, when do they tend to fall",
+  which converges to the global shape in expectation.
+- **Per-player goal-count distribution.** From each iteration's goal
+  count per player we build a histogram (exactly 1, 2, 3, 4, 5+ goals);
+  P(0) is the complement of "scored in ≥1 iteration". Reported as
+  P(0) / P(1) / P(≥2) / P(hat-trick ≥3) over the 8 000 simulated
+  tournaments. Counts are capped at 5+.
+
+**n/v semantics in the table.** A goal/assist metric shows `n/v` only
+when the player has no Big-5 xG basis (`npxG90 == null`) *and* never
+received a sampled goal — i.e. there is genuinely no information.
+Players on **sparse-coverage teams** (fewer than 3 Big-5 players, e.g.
+Iraq, Uzbekistan, Jordan) receive position-default goal shares, so
+they show real — if lower-confidence — numbers, flagged "pos-default".
+**Card metrics (E[Y], E[R], P(suspended)) are position-based and are
+therefore always available for every player**, including non-Big-5
+players, which is why all 1163 appear in the table. Model inputs
+(npxG/90, xA/90, minute share, league strength, club) are shown in the
+detail panel for full transparency. Players can be pinned to a
+side-by-side comparison tray (capped at 4).
+
 ## 5g. Card / discipline model
 
 Per match per team we draw a Poisson count for yellow cards

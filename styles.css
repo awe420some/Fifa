@@ -410,3 +410,49 @@ footer.foot {
 @media (max-width: 720px) {
   .team-matrix { font-size: 0.66rem; display: block; overflow-x: auto; }
 }
+
+/* ─────────── Per-player mega-table ─────────── */
+.mega-controls { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin: 10px 0; }
+.mega-controls #players-search {
+  flex: 1 1 220px; min-width: 180px; padding: 7px 10px;
+  background: var(--card, #0e1a16); color: var(--ink);
+  border: 1px solid rgba(127, 168, 150, 0.3); border-radius: 6px; font-size: 0.85rem;
+}
+.mega-scroll { max-height: 620px; overflow: auto; border: 1px solid rgba(127, 168, 150, 0.12); border-radius: 8px; }
+.mega-table { font-size: 0.74rem; }
+.mega-table thead th { position: sticky; top: 0; z-index: 2; background: #10211b; }
+.mega-table td { white-space: nowrap; }
+.mega-table .pin-col, .mega-table .pin-cell { width: 28px; }
+.mega-table td.num, .mega-table th[data-sort] { text-align: right; }
+.player-row { cursor: pointer; }
+.player-row:hover { background: rgba(127, 168, 150, 0.08); }
+.player-row.expanded { background: rgba(0, 217, 126, 0.10); }
+.cap-badge {
+  display: inline-block; font-size: 0.6rem; font-weight: 700; color: #04110c;
+  background: var(--accent-2, #00d97e); border-radius: 3px; padding: 0 3px; margin-left: 4px;
+}
+.nv { font-style: italic; }
+.pin-box { cursor: pointer; }
+
+/* Detail row */
+.player-detail > td { background: rgba(8, 20, 16, 0.6); padding: 12px 14px; }
+.detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
+.detail-block h5 { margin: 0 0 8px; font-size: 0.82rem; color: var(--accent-2, #00d97e); }
+.detail-list { list-style: none; margin: 0; padding: 0; font-size: 0.78rem; }
+.detail-list li { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; border-bottom: 1px dotted rgba(127, 168, 150, 0.15); }
+.detail-list li span { color: var(--muted); }
+.pos-default-note { margin-top: 6px; }
+
+/* Compare tray */
+.compare-tray { margin: 12px 0; border: 1px solid rgba(0, 217, 126, 0.3); border-radius: 8px; padding: 10px; background: rgba(0, 217, 126, 0.04); }
+.compare-head { margin-bottom: 8px; }
+.compare-table { font-size: 0.76rem; }
+.compare-table .metric-label { text-align: left; color: var(--muted); }
+.compare-table th { position: relative; }
+.compare-pin-remove {
+  position: absolute; top: 2px; right: 2px; border: none; background: transparent;
+  color: #ef476f; cursor: pointer; font-size: 0.9rem; line-height: 1; padding: 0 3px;
+}
+@media (max-width: 720px) {
+  .mega-table { font-size: 0.66rem; }
+}
