@@ -18,6 +18,7 @@ import { aggregateMarket, deVig } from "./models/market.js";
 import { buildCovariateProvider } from "./predictor.js";
 import { PLAYERS_2026, BIG5_LEAGUES } from "./data/players-2026.js";
 import { GOAL_MINUTE_BINS, DEFAULT_MIN_SHARE, LEAGUE_STRENGTH, teamScoringShares } from "./models/players.js";
+import { buildAllMatchForecasts } from "./models/matchForecast.js";
 
 async function loadMarketSnapshot() {
   try {
@@ -138,6 +139,10 @@ const state = {
   expandedCalibrationBin: null,
   expandedHistoryDate: null,
   expandedGroupTeam: null,
+  // Match-forecast state
+  matchForecasts: null,         // Map<matchNo, { stage, matchups: [...] }>
+  expandedMatch: null,          // currently-open match number
+  scheduleFilter: { stage: "", group: "", date: "" },
   backtestPerMatch: {},         // lazy cache: { [year]: [matches] }
   // Mega-table state
   megaSort: { key: "expGoals", dir: "desc" },
@@ -525,6 +530,7 @@ function renderGroups() {
             }).join("")}
           </tbody>
         </table>
+        ${renderGroupMatchList(letter)}
       </div>
     `;
   }).join("");
@@ -785,6 +791,28 @@ function setupScenarios() {
       if (state.players) renderPlayerMegaTable();
     });
   }
+  // Schedule-section filters (stage / group / date)
+  const schStage = $("#schedule-stage");
+  if (schStage) {
+    schStage.addEventListener("change", () => {
+      state.scheduleFilter.stage = schStage.value;
+      renderScheduleSection();
+    });
+  }
+  const schGroup = $("#schedule-group");
+  if (schGroup) {
+    schGroup.addEventListener("change", () => {
+      state.scheduleFilter.group = schGroup.value;
+      renderScheduleSection();
+    });
+  }
+  const schDate = $("#schedule-date");
+  if (schDate) {
+    schDate.addEventListener("change", () => {
+      state.scheduleFilter.date = schDate.value;
+      renderScheduleSection();
+    });
+  }
   // Delegated clicks on the mega-table: header sort, pin checkbox, row expand.
   const megaWrap = $("#players-table");
   if (megaWrap) {
@@ -833,8 +861,9 @@ function setupScenarios() {
         // Allow pin checkboxes & refresh button to handle themselves.
         return;
       }
-      // (1) Player Top-N link → mega-table jump
-      const playerLink = e.target.closest("#players-card .player-link");
+      // (1) Player Top-N link → mega-table jump. .player-link can be in
+      // the players-card, in a match panel, in a compare tray, etc.
+      const playerLink = e.target.closest(".player-link[data-player]");
       if (playerLink) { jumpToPlayer(playerLink.dataset.player); return; }
       // (2) Calibration dot
       const calDot = e.target.closest("#calibration .cal-dot");
@@ -885,7 +914,16 @@ function setupScenarios() {
         renderStages();
         return;
       }
-      // (8) Generic team item (Top-3 card / Distribution row / Market row)
+      // (8a) Match row (in any group-card or in #schedule-card)
+      const matchRow = e.target.closest("[data-match-no]");
+      if (matchRow) {
+        const no = Number(matchRow.dataset.matchNo);
+        state.expandedMatch = state.expandedMatch === no ? null : no;
+        renderGroups();
+        renderScheduleSection();
+        return;
+      }
+      // (9) Generic team item (Top-3 card / Distribution row / Market row)
       const teamEl = e.target.closest("[data-team]");
       if (teamEl) {
         const code = teamEl.dataset.team;
@@ -907,6 +945,222 @@ function togglePin(name, on) {
   }
   renderPlayerMegaTable();
   renderCompareTray();
+}
+
+/* ─────────── Match-level forecasts (104 matches, group + KO) ─────────── */
+
+// Returns the schedule entry for a match number (or null).
+function getMatch(matchNo) {
+  return state.schedule?.find((m) => m.matchNo === matchNo) || null;
+}
+
+// Resolve a placeholder slot like "1A" / "W73" into a human label.
+function slotLabel(slot) {
+  if (/^[1-4][A-L]$/.test(slot)) {
+    const dict = t();
+    const pos = slot[0]; const grp = slot[1];
+    const labels = dict.slotPos || { "1": "1st", "2": "2nd", "3": "3rd", "4": "4th" };
+    return `${labels[pos] || pos}. ${dict.slotGroup || "Group"} ${grp}`;
+  }
+  if (/^3[A-L]+$/.test(slot)) {
+    const letters = slot.slice(1).split("").join("/");
+    const dict = t();
+    return `${dict.slotBest3 || "Best 3rd"} (${letters})`;
+  }
+  if (/^W\d+$/.test(slot)) {
+    const dict = t();
+    return `${dict.slotWinner || "Winner"} #${slot.slice(1)}`;
+  }
+  if (/^L\d+$/.test(slot)) {
+    const dict = t();
+    return `${dict.slotLoser || "Loser"} #${slot.slice(1)}`;
+  }
+  return teamName(slot) || slot;
+}
+
+// Compact one-line summary of a match used in lists.
+function matchSummaryLine(match) {
+  const fc = state.matchForecasts?.get(match.matchNo);
+  const teams = (() => {
+    if (match.stage === "group") {
+      return `${teamName(match.teamA)} – ${teamName(match.teamB)}`;
+    }
+    // KO: show "most-likely matchup or placeholder labels"
+    const primary = fc?.matchups?.[0];
+    if (primary) {
+      return `${teamName(primary.teamA)} – ${teamName(primary.teamB)} <span class="muted small">· ${(primary.matchupProb * 100).toFixed(0)}%</span>`;
+    }
+    return `${escape(slotLabel(match.teamA))} – ${escape(slotLabel(match.teamB))}`;
+  })();
+  const lambdas = fc?.matchups?.[0] ? `${fc.matchups[0].lambdaA.toFixed(1)}–${fc.matchups[0].lambdaB.toFixed(1)}` : "—";
+  const d = new Date(match.kickoffUTC);
+  const dateStr = isNaN(d.getTime()) ? match.date : d.toISOString().slice(5, 10) + " " + d.toISOString().slice(11, 16) + "Z";
+  return { teams, lambdas, dateStr };
+}
+
+function renderGroupMatchList(letter) {
+  if (!state.schedule || !state.matchForecasts) return "";
+  const dict = t();
+  const matches = state.schedule
+    .filter((m) => m.stage === "group" && m.group === letter)
+    .sort((a, b) => new Date(a.kickoffUTC) - new Date(b.kickoffUTC));
+  if (!matches.length) return "";
+  const rows = matches.map((m) => {
+    const open = state.expandedMatch === m.matchNo;
+    const sum = matchSummaryLine(m);
+    return `
+      <div class="match-row${open ? " expanded" : ""}" data-match-no="${m.matchNo}">
+        <span class="match-date">${escape(sum.dateStr)}</span>
+        <span class="match-teams">${sum.teams}</span>
+        <span class="match-lambdas muted small">λ ${escape(sum.lambdas)}</span>
+      </div>
+      ${open ? `<div class="match-panel">${renderMatchPanel(m.matchNo)}</div>` : ""}
+    `;
+  }).join("");
+  return `<div class="group-matches">
+    <h5 class="muted small">${escape(dict.groupMatchesHeader || "Group matches")}</h5>
+    ${rows}
+  </div>`;
+}
+
+function renderMatchPanel(matchNo) {
+  const dict = t();
+  const ex = dict.matchExp || {};
+  const match = getMatch(matchNo);
+  const fc = state.matchForecasts?.get(matchNo);
+  if (!match || !fc) return `<p class="muted small">—</p>`;
+  if (!fc.matchups.length) {
+    return `<p class="muted small">${escape(ex.noMatchups || "No matchup data — needs MC group-position output.")}</p>`;
+  }
+  // Primary matchup + alternatives
+  const primary = fc.matchups[0];
+  const alts = fc.matchups.slice(1);
+  // Header
+  const d = new Date(match.kickoffUTC);
+  const dateStr = isNaN(d.getTime()) ? match.date : d.toISOString().slice(0, 16).replace("T", " ") + " UTC";
+  const stageLabel = dict.stageLabels?.[match.stage] || match.stage.toUpperCase();
+  const headerPrefix = match.stage === "group"
+    ? `${escape(stageLabel)} ${match.group} · ${escape(dateStr)}`
+    : `${escape(stageLabel)} · ${escape(dateStr)}`;
+  const koMatchupNote = match.stage !== "group"
+    ? `<p class="muted small matchup-prob">${escape(ex.likeliestMatchup || "Most-likely matchup")}: ${escape(teamName(primary.teamA))} – ${escape(teamName(primary.teamB))} <strong>${(primary.matchupProb * 100).toFixed(1)}%</strong></p>` : "";
+  // Outcome block
+  const outcomeBlock = `
+    <div class="detail-block">
+      <h5>${escape(ex.outcome || "Match outcome")}</h5>
+      <ul class="detail-list">
+        <li><span>${escape(teamName(primary.teamA))}</span><b>${pct(primary.winA, 0)}</b></li>
+        <li><span>${escape(ex.draw || "Draw")}</span><b>${pct(primary.draw, 0)}</b></li>
+        <li><span>${escape(teamName(primary.teamB))}</span><b>${pct(primary.winB, 0)}</b></li>
+        <li><span>${escape(ex.expGoals || "Expected goals")}</span><b>${primary.lambdaA.toFixed(2)} – ${primary.lambdaB.toFixed(2)}</b></li>
+        <li><span>${escape(ex.totalGoals || "Total expected")}</span><b>${(primary.lambdaA + primary.lambdaB).toFixed(2)}</b></li>
+      </ul>
+    </div>`;
+  const scorerBlock = (teamCode, scorers) => `
+    <div class="detail-block">
+      <h5>${escape(ex.topScorers || "Top scorers")} · ${escape(teamName(teamCode))}</h5>
+      <ul class="detail-list">
+        ${scorers.length === 0 ? `<li><span class="muted">${escape(ex.noScorers || "n/v")}</span></li>` :
+          scorers.map((s) => `<li class="player-link" data-player="${escape(s.name)}"><span>${escape(s.name)}</span><b>${pct(s.prob, 0)}</b></li>`).join("")}
+      </ul>
+    </div>`;
+  const assistBlock = `
+    <div class="detail-block">
+      <h5>${escape(ex.topAssists || "Top assists")}</h5>
+      <ul class="detail-list">
+        ${primary.assistsA.slice(0, 3).map((a) => `<li class="player-link" data-player="${escape(a.name)}"><span>${escape(a.name)} <span class="muted small">${escape(teamName(primary.teamA))}</span></span><b>${pct(a.prob, 0)}</b></li>`).join("")}
+        ${primary.assistsB.slice(0, 3).map((a) => `<li class="player-link" data-player="${escape(a.name)}"><span>${escape(a.name)} <span class="muted small">${escape(teamName(primary.teamB))}</span></span><b>${pct(a.prob, 0)}</b></li>`).join("")}
+      </ul>
+    </div>`;
+  // Minute heatmap — scale each bin's prior by total expected goals to give
+  // expected number of goals per bin.
+  const total = primary.lambdaA + primary.lambdaB;
+  const maxBin = Math.max(...GOAL_MINUTE_BINS.map((b) => b.p), 0.01);
+  const minuteBlock = `
+    <div class="detail-block">
+      <h5>${escape(ex.minuteHeatmap || "Goal-time distribution")}</h5>
+      <div class="minute-grid">
+        ${GOAL_MINUTE_BINS.map((b) => {
+          const intensity = (b.p / maxBin).toFixed(3);
+          const expBin = (b.p * total).toFixed(2);
+          return `<div class="minute-cell" style="--p:${intensity}">
+            <div class="minute-label">${escape(b.label)}</div>
+            <div class="minute-val">${expBin}</div>
+          </div>`;
+        }).join("")}
+      </div>
+      <p class="muted small">${escape(ex.minuteLegend || "Cell value = expected goals in bin")}</p>
+    </div>`;
+  // Alternatives
+  const altsBlock = alts.length === 0 ? "" : `
+    <div class="detail-block" style="grid-column: 1 / -1">
+      <h5>${escape(ex.alternatives || "Alternative matchups")}</h5>
+      <ul class="detail-list">
+        ${alts.map((a) => `<li><span>${escape(teamName(a.teamA))} – ${escape(teamName(a.teamB))}</span><b>${(a.matchupProb * 100).toFixed(1)}%</b></li>`).join("")}
+      </ul>
+    </div>`;
+  return `
+    <h4 style="margin:0 0 8px">${headerPrefix}</h4>
+    ${koMatchupNote}
+    <div class="detail-grid">
+      ${outcomeBlock}
+      ${scorerBlock(primary.teamA, primary.scorersA.slice(0, 5))}
+      ${scorerBlock(primary.teamB, primary.scorersB.slice(0, 5))}
+      ${assistBlock}
+      ${minuteBlock}
+      ${altsBlock}
+    </div>`;
+}
+
+const STAGE_ORDER = ["group", "R32", "R16", "QF", "SF", "third", "final"];
+
+function populateScheduleFilters() {
+  const dict = t();
+  const stageSel = $("#schedule-stage");
+  if (stageSel && !stageSel.dataset.filled) {
+    const opts = ["", ...STAGE_ORDER];
+    stageSel.innerHTML = opts.map((s) => `<option value="${s}">${escape(s === "" ? (dict.scheduleAllStages || "— all stages —") : (dict.stageLabels?.[s] || s.toUpperCase()))}</option>`).join("");
+    stageSel.dataset.filled = "1";
+  }
+  const groupSel = $("#schedule-group");
+  if (groupSel && !groupSel.dataset.filled) {
+    const groups = Object.keys(GROUPS_2026);
+    groupSel.innerHTML = `<option value="">${escape(dict.scheduleAllGroups || "— all groups —")}</option>` +
+      groups.map((g) => `<option value="${g}">${escape(dict.sectionGroups || "Group")} ${g}</option>`).join("");
+    groupSel.dataset.filled = "1";
+  }
+}
+
+function renderScheduleSection() {
+  if (!state.schedule || !state.matchForecasts) {
+    $("#schedule-card")?.setAttribute("hidden", "");
+    return;
+  }
+  $("#schedule-card")?.removeAttribute("hidden");
+  populateScheduleFilters();
+  const dict = t();
+  const f = state.scheduleFilter;
+  const matches = state.schedule
+    .filter((m) => !f.stage || m.stage === f.stage)
+    .filter((m) => !f.group || m.group === f.group)
+    .filter((m) => !f.date || m.date === f.date)
+    .sort((a, b) => new Date(a.kickoffUTC) - new Date(b.kickoffUTC));
+  $("#schedule-count").textContent = String(matches.length);
+  const rows = matches.map((m) => {
+    const open = state.expandedMatch === m.matchNo;
+    const sum = matchSummaryLine(m);
+    const stageLabel = dict.stageLabels?.[m.stage] || m.stage.toUpperCase();
+    return `
+      <div class="match-row${open ? " expanded" : ""}" data-match-no="${m.matchNo}">
+        <span class="match-date">${escape(sum.dateStr)}</span>
+        <span class="match-stage muted small">${escape(stageLabel)}${m.group ? " · " + m.group : ""}</span>
+        <span class="match-teams">${sum.teams}</span>
+        <span class="match-lambdas muted small">λ ${escape(sum.lambdas)}</span>
+      </div>
+      ${open ? `<div class="match-panel">${renderMatchPanel(m.matchNo)}</div>` : ""}
+    `;
+  }).join("");
+  $("#schedule-list").innerHTML = rows || `<p class="muted small">${escape(dict.scheduleEmpty || "No matches match the current filter.")}</p>`;
 }
 
 function renderHistoryFanChart() {
@@ -984,6 +1238,20 @@ function recompute() {
     state.blendedTitle = blendWithMarket(state.mc.titleProbability, state.marketProbs || MARKET_ODDS_2026, DEFAULT_WEIGHTS.market);
   } else {
     state.blendedTitle = state.mc.titleProbability;
+  }
+  // Per-match player forecasts — analytic layer on top of the MC outputs.
+  if (state.schedule) {
+    const ctx = {
+      weights: state.mc.weights || DEFAULT_WEIGHTS,
+      squadDelta: state.options.useSquad ? state.squadDelta : null,
+      dcParams: state.options.useDC ? state.dcParams : null,
+      eloMap: ELO_2026,
+      hostCodes,
+      options: state.options,
+      covariateProvider: state.options.useCovariates ? state.covariateProvider : null,
+    };
+    const probsFn = (a, b) => matchProbs({ code: a }, { code: b }, ctx);
+    state.matchForecasts = buildAllMatchForecasts(state.schedule, state.mc, probsFn, { groupsByLetter: GROUPS_2026 });
   }
 }
 
@@ -1063,6 +1331,7 @@ function renderAll() {
   renderMarket();
   renderTeamMarketMatrix();
   renderGroups();
+  renderScheduleSection();
   renderPlayers();
   renderBacktest();
   renderCalibration();

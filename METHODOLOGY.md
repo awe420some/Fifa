@@ -582,6 +582,62 @@ All explainers reuse the `<tr class="explain-detail">` / `.detail-grid` /
 backtest per-match recomputation does meaningful work on click; it's
 cached per-year in `state.backtestPerMatch`.
 
+## 5k. Per-match player forecasts
+
+Every one of the 104 tournament matches is clickable and reveals a
+player-level forecast. The implementation is **pure analytic** —
+re-using the existing MC outputs rather than running a new MC pass:
+
+- `matchProbs(teamA, teamB, ctx)` supplies the Poisson rates
+  `(λ_A, λ_B)` for that specific match, already adjusted for Elo, Dixon-
+  Coles, squad delta, and (in group stage) covariates.
+- `precomputeShares()` supplies each team's multinomial
+  `{names, probs}` for "given my team scores, who scored?".
+- **Per-player goal probability**:
+  `P(player_i scores ≥1 in match) = 1 − exp(−λ_team × p_i)`.
+- **Assist probability**: same form with effective rate
+  `ASSIST_RATE × λ_team` where `ASSIST_RATE = 0.72` (empirical share of
+  goals with a primary assist, baked into `samplePlayerEvents`).
+- **Per-match minute distribution**: the global 8-bin prior scaled by
+  the match's total expected goals — bin cell value = `bin.p × (λ_A +
+  λ_B)`.
+
+**Knockout slots.** KO matches in `data/schedule-2026.json` carry
+placeholder slot labels (`"1A"`, `"2B"`, `"3CEFHI"`, `"W73"`,
+`"L101"`) because the participants depend on prior-round outcomes. We
+resolve each slot into a probability distribution over team codes:
+
+- `"1A"` / `"2A"` / `"3A"` / `"4A"` use
+  `state.mc.groupPositionDistribution[code].pN / total` for codes in
+  group A.
+- `"3CEFHI"` (best 3rd from one of the listed five groups) pools the
+  `p3` probabilities across the eligible group set, then normalises.
+- `"W73"` / `"L73"` is recursive: resolve match 73's two slots first,
+  enumerate `(a, b)` candidate pairings weighted by their joint slot
+  probability, then use `matchProbs(a, b)` to get
+  `P(a wins) ≈ home + 0.5 × draw` (the 50/50 split on draws captures
+  KO's ET-+-penalties resolution in expectation; the MC's actual
+  resolution is finer but doesn't bias the analytic estimate
+  meaningfully).
+
+For each KO match the renderer enumerates the cartesian product of
+both slot distributions, sorts by joint probability, and shows the
+**top-3 most likely matchups**. The primary matchup drives the
+displayed scorer / assist / minute panels; the alternatives appear in
+an "alternative matchups" block at the bottom of the detail panel
+with their joint probabilities.
+
+Honest scope: this assumes the two slots are independent, which
+overstates pairs whose teams come from the same group in early KO
+rounds (they can't meet there). The joint probability of such pairs
+is small for the most-likely picks anyway, and we don't currently
+enforce the bracket constraint; document this rather than ignore it.
+
+The renderer reuses the `.detail-grid` / `.detail-block` / `.minute-
+grid` / `.dist-row` CSS template; the only new surface elements are
+the `.match-row` and `.match-panel` wrappers + the schedule-filter
+bar in `#schedule-card`.
+
 ## 6. Counterfactuals & a DiD case study (host effect 2010 RSA)
 
 We don't run DiD or Synthetic Control in the dashboard MC pipeline —
