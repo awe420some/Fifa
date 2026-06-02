@@ -520,8 +520,10 @@ markets until ~6 weeks before the tournament), the column displays
 
 ## 5j. Auto-refresh + change-diff + click-to-explain
 
-The dashboard refreshes its data inputs without a full page reload via three
-layered mechanisms:
+The dashboard refreshes its data inputs without a full page reload via two
+layered mechanisms (Vercel Hobby tier limits cron-jobs to once per day, so
+the planned 5-minute Vercel-cron was dropped — the same effect is achieved
+by the edge cache plus the browser polling below):
 
 1. **GitHub Action `*/30 * * * *`** — every 30 minutes the scraper job
    re-runs `scrape-bookmakers.mjs` + `scrape-player-props.mjs` +
@@ -529,19 +531,16 @@ layered mechanisms:
    single `data/freshness.json` manifest (`{ market, playerProps,
    titleHistory, writtenAt, actionRunId }`) so the UI can show an honest
    "last update X min ago" without parsing every source file.
-2. **Vercel Cron `*/5 * * * *`** triggers `api/live` (Edge Function) so the
-   edge cache stays warm with a recent live-match snapshot. The function
-   reads `LIVE_PROVIDER` + `LIVE_API_KEY` from project env vars. The
-   default provider is `football-data.org` Free; with no env vars the
-   endpoint returns `{ status: "no-source" }` and the UI surfaces a
-   "Live-Mode pending" note. Edge-cache `s-maxage=30,
-   stale-while-revalidate=60` means concurrent visitors share a single
-   upstream call.
-3. **Browser polling 30 s** against `/api/live` while a live window is
-   active (any scheduled match with kickoff ≤ now ≤ kickoff + 2 h). Outside
-   that window polling is off — no idle traffic. An `AbortController`
-   cancels in-flight requests on each tick so the live banner never stacks
-   updates.
+2. **Browser polling 30 s** against `/api/live` (Edge Function) while a
+   live window is active (any scheduled match with kickoff ≤ now ≤ kickoff
+   + 2 h). Outside that window polling is off — no idle traffic. An
+   `AbortController` cancels in-flight requests on each tick so the live
+   banner never stacks updates. The Edge Function reads `LIVE_PROVIDER` +
+   `LIVE_API_KEY` from project env vars; default provider is
+   `football-data.org` Free. Without env vars it returns
+   `{ status: "no-source" }` and the UI surfaces a "Live-Mode pending"
+   note. Edge-cache `s-maxage=30, stale-while-revalidate=60` means
+   concurrent visitors share a single upstream call.
 
 A small **freshness banner** at the top of the dashboard shows the minutes
 since `freshness.writtenAt`, the count of probability changes since the
