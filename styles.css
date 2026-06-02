@@ -574,3 +574,16 @@ footer.foot {
 #schedule-list .match-row {
   grid-template-columns: 95px 130px 1fr auto;
 }
+
+.fb-btn-secondary {
+  margin-left: 6px;
+  background: rgba(127, 168, 150, 0.08);
+  border: 1px solid rgba(127, 168, 150, 0.35);
+  color: var(--muted);
+}
+.fb-btn-secondary:hover { background: rgba(127, 168, 150, 0.15); color: var(--ink); }
+.fb-btn-secondary.active {
+  background: rgba(0, 217, 126, 0.15);
+  border-color: rgba(0, 217, 126, 0.5);
+  color: var(--accent-2, #00d97e);
+}

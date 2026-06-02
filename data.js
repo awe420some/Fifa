@@ -460,6 +460,10 @@ export const I18N = {
       liveActive: "Live · matches in progress",
       liveIdle: "",
       liveNoSource: "Live-Mode pending — no source configured yet",
+      livePolling: "Polling /api/live · waiting for kickoff",
+      liveOverrideNoSource: "Live-Mode forced — set LIVE_PROVIDER + LIVE_API_KEY in Vercel ENV",
+      liveToggleStart: "Activate Live-Mode",
+      liveToggleStop: "Stop Live-Mode",
     },
     explain: {
       componentBreakdown: "Component decomposition",
@@ -606,6 +610,10 @@ export const I18N = {
       liveActive: "Live · Spiele laufen",
       liveIdle: "",
       liveNoSource: "Live-Mode aktiv, aber keine Datenquelle konfiguriert",
+      livePolling: "Polling /api/live · warte auf Anpfiff",
+      liveOverrideNoSource: "Live-Mode forciert — LIVE_PROVIDER + LIVE_API_KEY in Vercel-ENV setzen",
+      liveToggleStart: "Live-Mode aktivieren",
+      liveToggleStop: "Live-Mode stoppen",
     },
     explain: {
       componentBreakdown: "Komponenten-Zerlegung",
