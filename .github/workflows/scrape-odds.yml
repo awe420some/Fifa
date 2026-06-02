@@ -2,8 +2,8 @@ name: Scrape bookmaker odds
 
 on:
   schedule:
-    - cron: "0 6 * * 1"   # every Monday 06:00 UTC
-  workflow_dispatch:        # also runnable manually from the Actions tab
+    - cron: "*/30 * * * *"   # every 30 minutes — pre-tournament cadence
+  workflow_dispatch:           # also runnable manually from the Actions tab
 
 permissions:
   contents: write
@@ -43,19 +43,24 @@ jobs:
         run: node scripts/snapshot-forecast.mjs
         continue-on-error: true
 
+      - name: Write freshness manifest
+        id: freshness
+        run: node scripts/write-freshness.mjs
+        continue-on-error: true
+
       - name: Commit snapshots if changed
         if: steps.scrape.outcome == 'success' || steps.props.outcome == 'success' || steps.forecast.outcome == 'success'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           changed=0
-          for f in data/market-snapshot.json data/player-props-2026.json data/title-history.json; do
+          for f in data/market-snapshot.json data/player-props-2026.json data/title-history.json data/freshness.json; do
             if [ -f "$f" ] && ! git diff --quiet "$f"; then
               git add "$f"; changed=1
             fi
           done
           if [ "$changed" = "1" ]; then
-            git commit -m "Refresh odds + props + forecast snapshot ($(date -u +%Y-%m-%d))"
+            git commit -m "Refresh odds + props + forecast snapshot ($(date -u +%Y-%m-%dT%H:%MZ))"
             git push
           else
             echo "No changes to commit."

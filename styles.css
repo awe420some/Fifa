@@ -456,3 +456,84 @@ footer.foot {
 @media (max-width: 720px) {
   .mega-table { font-size: 0.66rem; }
 }
+
+/* ─────────── Freshness banner + trend arrows + explainers ─────────── */
+.freshness-banner {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin: 0 0 14px; padding: 8px 12px;
+  background: rgba(0, 217, 126, 0.06);
+  border: 1px solid rgba(0, 217, 126, 0.25);
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+.fb-icon { color: var(--accent-2, #00d97e); }
+.fb-text { color: var(--ink); }
+.fb-changes { color: var(--muted); }
+.fb-btn {
+  margin-left: auto;
+  padding: 5px 12px; border-radius: 6px;
+  border: 1px solid rgba(0, 217, 126, 0.4);
+  background: transparent; color: var(--accent-2, #00d97e);
+  cursor: pointer; font-size: 0.82rem;
+  transition: background 0.15s;
+}
+.fb-btn:hover { background: rgba(0, 217, 126, 0.1); }
+.fb-btn.spinning { opacity: 0.6; pointer-events: none; }
+.fb-btn.spinning::after { content: " …"; }
+.fb-live-status { font-size: 0.78rem; color: var(--muted); }
+.fb-live-status.active { color: var(--accent-2, #00d97e); font-weight: 600; }
+.trend {
+  display: inline-block; margin-left: 6px;
+  font-size: 0.7rem; font-weight: 600; vertical-align: middle;
+}
+.trend-up   { color: var(--accent-2, #00d97e); }
+.trend-down { color: #ef476f; }
+
+/* ── Explainer panels (shared for all aggregate surfaces) ── */
+.explain-detail > td {
+  background: rgba(8, 20, 16, 0.6);
+  padding: 12px 14px;
+  border-top: 1px solid rgba(0, 217, 126, 0.18);
+}
+.explain-panel {
+  background: rgba(8, 20, 16, 0.6);
+  border: 1px solid rgba(0, 217, 126, 0.18);
+  border-radius: 8px;
+  padding: 12px 14px; margin: 8px 0;
+}
+.explain-panel h5,
+.explain-detail h5 { margin: 0 0 8px; font-size: 0.82rem; color: var(--accent-2, #00d97e); }
+
+/* Click affordances */
+.top-card[data-team],
+.dist-row[data-team],
+.market-row[data-team],
+#stages tr.stage-row,
+#groups .group-team-row,
+#backtest tr.bt-row-click,
+#team-matrix td.matrix-cell-wrap,
+.player-link {
+  cursor: pointer;
+}
+.top-card[data-team]:hover,
+.dist-row[data-team]:hover,
+.market-row[data-team]:hover {
+  outline: 1px solid rgba(0, 217, 126, 0.35);
+}
+#stages tr.stage-row:hover,
+#groups .group-team-row:hover,
+#backtest tr.bt-row-click:hover { background: rgba(127, 168, 150, 0.08); }
+#stages tr.stage-row.expanded,
+#groups .group-team-row.expanded,
+#backtest tr.bt-row-click.expanded { background: rgba(0, 217, 126, 0.10); }
+
+.cal-dot  { cursor: pointer; }
+.cal-dot:hover  { stroke: var(--accent-2, #00d97e); stroke-width: 2; }
+.hist-dot { cursor: pointer; }
+.hist-dot:hover { r: 5; }
+
+@keyframes row-flash {
+  0%   { background: rgba(0, 217, 126, 0.45); }
+  100% { background: transparent; }
+}
+.row-flash { animation: row-flash 1.2s ease-out 1; }

@@ -518,6 +518,71 @@ case for stages other than Title, since most books don't post those
 markets until ~6 weeks before the tournament), the column displays
 `n/v`. The matrix is sortable by any stage's diff; click the header.
 
+## 5j. Auto-refresh + change-diff + click-to-explain
+
+The dashboard refreshes its data inputs without a full page reload via three
+layered mechanisms:
+
+1. **GitHub Action `*/30 * * * *`** — every 30 minutes the scraper job
+   re-runs `scrape-bookmakers.mjs` + `scrape-player-props.mjs` +
+   `snapshot-forecast.mjs`, then `scripts/write-freshness.mjs` emits a
+   single `data/freshness.json` manifest (`{ market, playerProps,
+   titleHistory, writtenAt, actionRunId }`) so the UI can show an honest
+   "last update X min ago" without parsing every source file.
+2. **Vercel Cron `*/5 * * * *`** triggers `api/live` (Edge Function) so the
+   edge cache stays warm with a recent live-match snapshot. The function
+   reads `LIVE_PROVIDER` + `LIVE_API_KEY` from project env vars. The
+   default provider is `football-data.org` Free; with no env vars the
+   endpoint returns `{ status: "no-source" }` and the UI surfaces a
+   "Live-Mode pending" note. Edge-cache `s-maxage=30,
+   stale-while-revalidate=60` means concurrent visitors share a single
+   upstream call.
+3. **Browser polling 30 s** against `/api/live` while a live window is
+   active (any scheduled match with kickoff ≤ now ≤ kickoff + 2 h). Outside
+   that window polling is off — no idle traffic. An `AbortController`
+   cancels in-flight requests on each tick so the live banner never stacks
+   updates.
+
+A small **freshness banner** at the top of the dashboard shows the minutes
+since `freshness.writtenAt`, the count of probability changes since the
+visitor's previous visit, and a "Refresh now" button that re-fetches all
+volatile data. Inline `↑ / ↓ pp` trend arrows appear next to every team-
+probability that has moved by more than 0.05 pp since the last visit. The
+baseline is persisted to `localStorage[wc26_prev_snapshot_v1]` after each
+successful render.
+
+Every aggregate surface is **click-to-explain**. A single delegated handler
+on `#dashboard` routes clicks to the appropriate surface-specific render:
+
+- **Top-3 card / Distribution row / Model-vs-Market row** (shared
+  `expandedTeam` slot): expand to show component decomposition
+  (ensemble %, market %, blended %), inputs (Elo rating, squad index,
+  squad-Elo delta, host bonus), uncertainty (surprise bits, 95% CI), and
+  trend vs last visit.
+- **Stage-by-stage row**: conditional drop rates R32 → R16 → … → Title,
+  position distribution P1/P2/P3/P4.
+- **Team Market Matrix cell** (`{code, stageKey}`): per-bookmaker quotes
+  for that stage from `state.marketSnapshot.sources`, logit-mean note,
+  γ-transform value.
+- **Group standings team row**: pairwise expected results vs all 3 group
+  opponents using `matchProbs()` with current ensemble, expected points
+  total, final-position distribution.
+- **Backtest year row**: lazy per-match RPS via re-running `matchProbs()`
+  on the historical matches of that year; best-3 / worst-3 predictions.
+- **Calibration dot**: bin range + n + mean predicted vs observed + the
+  Wilson 95% interval derivation.
+- **History-fan-chart dot**: the snapshot's top-N title probabilities at
+  that date; honest note that per-source breakdown isn't preserved for
+  historical dates.
+- **Player Top-N entries** (Golden Boot, Cards, Top-Scorer Market, Anytime
+  Market): click jumps to that player's row in the Mega-Table and
+  auto-expands the existing detail row — no duplicated render logic.
+
+All explainers reuse the `<tr class="explain-detail">` / `.detail-grid` /
+`.detail-block` template from §5f.1 — no new layout primitives. Only the
+backtest per-match recomputation does meaningful work on click; it's
+cached per-year in `state.backtestPerMatch`.
+
 ## 6. Counterfactuals & a DiD case study (host effect 2010 RSA)
 
 We don't run DiD or Synthetic Control in the dashboard MC pipeline —
