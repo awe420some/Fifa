@@ -62,6 +62,27 @@ async function loadPlayerProps() {
   }
 }
 
+async function loadFreshness() {
+  try {
+    const resp = await fetch("./data/freshness.json", { cache: "no-store" });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+async function loadLive(signal) {
+  try {
+    const resp = await fetch("/api/live", { cache: "no-store", signal });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (err) {
+    if (err?.name === "AbortError") return null;
+    return null;
+  }
+}
+
 // Power-method bias correction p_i^γ / Σ p_j^γ.
 function powerTransform(probs, gamma) {
   if (!gamma || gamma === 1) return probs;
@@ -101,6 +122,23 @@ const state = {
   playersComputing: false,
   playersTeamFilter: "",
   playerProps: null,
+  // Freshness + diff + live
+  freshness: null,
+  prev: null,                   // baseline snapshot for inline diff arrows
+  diff: null,                   // { totalChanges, title:{}, stages:{}, market:{} }
+  live: null,                   // /api/live payload
+  livePolling: null,            // setInterval handle
+  liveAbort: null,              // AbortController for in-flight fetch
+  refreshing: false,            // refresh-button spinner gate
+  // Single-open explainer slots — one per surface
+  expandedTeam: null,
+  expandedStage: null,
+  expandedMatrix: null,         // { code, stageKey }
+  expandedBacktestYear: null,
+  expandedCalibrationBin: null,
+  expandedHistoryDate: null,
+  expandedGroupTeam: null,
+  backtestPerMatch: {},         // lazy cache: { [year]: [matches] }
   // Mega-table state
   megaSort: { key: "expGoals", dir: "desc" },
   megaSearch: "",
@@ -160,16 +198,17 @@ function rankedTitles() {
 function renderTop3() {
   const ranked = rankedTitles().slice(0, 3);
   $("#top3").innerHTML = ranked.map((row, i) => `
-    <div class="top-card top-rank-${i + 1}">
+    <div class="top-card top-rank-${i + 1}${state.expandedTeam === row.code ? " expanded" : ""}" data-team="${row.code}">
       <div class="top-rank">${i + 1}</div>
       <div class="top-team">${escape(teamName(row.code))}</div>
       <div class="top-meta">${escape(teamByCode[row.code]?.confederation || "")}</div>
-      <div class="top-prob">${pct(row.p, 1)}</div>
+      <div class="top-prob">${pct(row.p, 1)}${trendArrow(row.code, "title")}</div>
       <div class="top-bar"><div class="top-bar-fill" style="width:${Math.min(100, row.p * 350)}%"></div></div>
       <div class="top-sub">
         <span>SF ${pct(state.mc.semisProbability[row.code] || 0, 0)}</span>
         <span>QF ${pct(state.mc.quartersProbability[row.code] || 0, 0)}</span>
       </div>
+      ${state.expandedTeam === row.code ? `<div class="explain-panel">${renderTeamExplainPanel(row.code)}</div>` : ""}
     </div>
   `).join("");
 }
@@ -239,7 +278,7 @@ function renderStages() {
     .sort((a, b) => b.tp - a.tp)
     .slice(0, 12);
   const rows = teams.map((r) => `
-    <tr>
+    <tr class="stage-row${state.expandedStage === r.code ? " expanded" : ""}" data-team="${r.code}">
       <td>${escape(teamName(r.code))}</td>
       <td class="num">${pct(r.market, 1)}</td>
       <td class="num">${pct(r.r32, 0)}</td>
@@ -247,12 +286,12 @@ function renderStages() {
       <td class="num">${pct(r.qf, 0)}</td>
       <td class="num">${pct(r.sf, 0)}</td>
       <td class="num">${pct(r.finalP, 1)}</td>
-      <td class="num accent">${pct(r.tp, 2)}</td>
+      <td class="num accent">${pct(r.tp, 2)}${trendArrow(r.code, "titleProbability")}</td>
       <td class="num small">${pct(r.sd, 2)}</td>
       <td class="num small">${r.totalSD == null ? "—" : pct(r.totalSD, 2)}</td>
       <td class="num small">[${pct(r.ciLow, 1)}, ${pct(r.ciHigh, 1)}]</td>
       <td class="num">${r.surprise === Infinity ? "—" : r.surprise.toFixed(1)}</td>
-    </tr>
+    </tr>${state.expandedStage === r.code ? `<tr class="explain-detail"><td colspan="12">${renderStageExplainPanel(r.code)}</td></tr>` : ""}
   `).join("");
   $("#stages").innerHTML = `
     <table class="stages-table">
@@ -289,11 +328,12 @@ function renderDistribution() {
   const visible = state.showAll ? ranked : ranked.slice(0, 12);
   const maxP = ranked[0]?.p || 0.01;
   $("#distribution").innerHTML = visible.map((r) => `
-    <div class="dist-row">
+    <div class="dist-row${state.expandedTeam === r.code ? " expanded" : ""}" data-team="${r.code}">
       <div class="dist-team">${escape(teamName(r.code))}</div>
       <div class="dist-bar"><div class="dist-fill" style="width:${(r.p / maxP) * 100}%"></div></div>
-      <div class="dist-prob">${pct(r.p, r.p < 0.01 ? 2 : 1)}</div>
+      <div class="dist-prob">${pct(r.p, r.p < 0.01 ? 2 : 1)}${trendArrow(r.code, "title")}</div>
       <div class="dist-extra muted">SF ${pct(r.semi, 0)} · Adv ${pct(r.advance, 0)}</div>
+      ${state.expandedTeam === r.code ? `<div class="explain-panel">${renderTeamExplainPanel(r.code)}</div>` : ""}
     </div>
   `).join("");
   $("#toggle-distribution").textContent = state.showAll ? dict.hideAll : dict.showAll;
@@ -317,12 +357,13 @@ function renderMarket() {
       <span><span class="legend-dot legend-market"></span>${escape(dict.marketLabel)}</span>
     </div>
     ${top.map((r) => `
-      <div class="market-row">
+      <div class="market-row${state.expandedTeam === r.code ? " expanded" : ""}" data-team="${r.code}">
         <div class="market-team">${escape(teamName(r.code))}</div>
         <div class="market-bars">
-          <div class="market-bar"><div class="market-fill model" style="width:${(r.model / maxV) * 100}%"></div><span class="market-val">${pct(r.model, 1)}</span></div>
-          <div class="market-bar"><div class="market-fill market" style="width:${(r.market / maxV) * 100}%"></div><span class="market-val">${pct(r.market, 1)}</span></div>
+          <div class="market-bar"><div class="market-fill model" style="width:${(r.model / maxV) * 100}%"></div><span class="market-val">${pct(r.model, 1)}${trendArrow(r.code, "title")}</span></div>
+          <div class="market-bar"><div class="market-fill market" style="width:${(r.market / maxV) * 100}%"></div><span class="market-val">${pct(r.market, 1)}${trendArrow(r.code, "market")}</span></div>
         </div>
+        ${state.expandedTeam === r.code ? `<div class="explain-panel">${renderTeamExplainPanel(r.code)}</div>` : ""}
       </div>
     `).join("")}
   `;
@@ -413,21 +454,25 @@ function renderTeamMarketMatrix() {
         ${headerCell("groupWin", cols.groupWin)}
         ${headerCell("topTwo", cols.topTwo)}
       </tr></thead>
-      <tbody>${rows.map((row) => `
-        <tr>
-          <td class="team-name">${escape(row.name)}</td>
-          ${MATRIX_STAGES.map((stage) => {
-            const s = row.stages[stage.key];
-            return `<td>
+      <tbody>${rows.map((row) => {
+        const isExpanded = state.expandedMatrix?.code === row.code;
+        const expandedStage = state.expandedMatrix?.stageKey;
+        const cells = MATRIX_STAGES.map((stage) => {
+          const s = row.stages[stage.key];
+          const open = isExpanded && expandedStage === stage.modelKey ? " open" : "";
+          return `<td class="matrix-cell-wrap${open}" data-team="${row.code}" data-stage="${stage.modelKey}">
               <div class="matrix-cell">
                 <span class="mc-model">${pct(s.model, s.model < 0.01 ? 2 : 1)}</span>
                 <span class="mc-market">${s.market != null ? pct(s.market, s.market < 0.01 ? 2 : 1) : "n/v"}</span>
                 <span class="mc-diff">${renderDiff(s.diff)}</span>
               </div>
             </td>`;
-          }).join("")}
-        </tr>
-      `).join("")}</tbody>
+        }).join("");
+        const explainRow = isExpanded
+          ? `<tr class="explain-detail"><td colspan="${MATRIX_STAGES.length + 1}">${renderMatrixCellExplain(row.code, expandedStage || "titleProbability")}</td></tr>`
+          : "";
+        return `<tr><td class="team-name">${escape(row.name)}</td>${cells}</tr>${explainRow}`;
+      }).join("")}</tbody>
     </table>
   `;
   // Wire up header clicks for sorting.
@@ -469,14 +514,15 @@ function renderGroups() {
         <table>
           <thead><tr><th></th><th>Team</th><th>Ø Pos</th><th>Adv</th></tr></thead>
           <tbody>
-            ${rows.map((r, i) => `
-              <tr class="${i < 2 ? "advance" : ""}">
+            ${rows.map((r, i) => {
+              const expanded = state.expandedGroupTeam === r.code;
+              return `<tr class="group-team-row${i < 2 ? " advance" : ""}${expanded ? " expanded" : ""}" data-team="${r.code}">
                 <td>${i + 1}</td>
                 <td>${escape(teamName(r.code))}</td>
                 <td>${r.avg.toFixed(2)}</td>
                 <td>${pct(r.adv || 0, 0)}</td>
-              </tr>
-            `).join("")}
+              </tr>${expanded ? `<tr class="explain-detail"><td colspan="4">${renderGroupTeamExplain(r.code)}</td></tr>` : ""}`;
+            }).join("")}
           </tbody>
         </table>
       </div>
@@ -488,16 +534,17 @@ function renderGroups() {
 
 function renderBacktest() {
   const dict = t();
-  const rows = state.backtest.perTournament.map((r) => `
-    <tr>
+  const rows = state.backtest.perTournament.map((r) => {
+    const expanded = state.expandedBacktestYear === r.year;
+    return `<tr class="bt-row-click${expanded ? " expanded" : ""}" data-year="${r.year}">
       <td class="bt-year">${r.year}</td>
       <td>${escape(teamNameEN(r.actualChampion))}</td>
       <td>${r.n}</td>
       <td class="num">${r.rpsElo?.toFixed(3) ?? "—"}</td>
       <td class="num">${r.rpsDC?.toFixed(3) ?? "—"}</td>
       <td class="num accent">${r.rpsEnsemble?.toFixed(3) ?? "—"}</td>
-    </tr>
-  `).join("");
+    </tr>${expanded ? `<tr class="explain-detail"><td colspan="6">${renderBacktestYearExplain(r.year)}</td></tr>` : ""}`;
+  }).join("");
   $("#backtest").innerHTML = `
     <table class="bt-table">
       <thead>
@@ -566,9 +613,12 @@ function renderCalibration() {
     const [lo, hi] = wilson(c.observed, c.n);
     return `<line x1="${x(c.midPred)}" y1="${y(lo)}" x2="${x(c.midPred)}" y2="${y(hi)}" stroke="rgba(0,217,126,0.4)" stroke-width="1.5" />`;
   }).join("");
-  const dots = valid.map((c) =>
-    `<circle cx="${x(c.midPred)}" cy="${y(c.observed)}" r="${Math.min(6, 2 + c.n / 25)}" fill="var(--accent)" opacity="0.9" />`
-  ).join("");
+  const dots = cells.map((c, i) => {
+    if (c.observed === null || !c.n) return "";
+    return `<circle class="cal-dot" data-bin="${i}" cx="${x(c.midPred)}" cy="${y(c.observed)}" r="${Math.min(6, 2 + c.n / 25)}" fill="var(--accent)" opacity="0.9" />`;
+  }).join("");
+  const explain = state.expandedCalibrationBin != null
+    ? `<div class="explain-panel">${renderCalibrationBinExplain(state.expandedCalibrationBin)}</div>` : "";
   $("#calibration").innerHTML = `
     <svg viewBox="0 0 ${w} ${h}" class="calibration-chart" aria-label="Calibration chart">
       <line x1="${x(0)}" y1="${y(0)}" x2="${x(1)}" y2="${y(1)}" stroke="rgba(127,168,150,0.4)" stroke-dasharray="4 3" />
@@ -577,7 +627,8 @@ function renderCalibration() {
       <text x="${m}" y="${h - 4}" font-size="10" fill="var(--muted)">predicted →</text>
       <text x="${m + 4}" y="${m}" font-size="10" fill="var(--muted)">observed ↑</text>
     </svg>
-    <p class="muted small">logit(observed) = <strong>${fit.a.toFixed(2)}</strong> + <strong>${fit.b.toFixed(2)}</strong> · logit(predicted) — ideal is (0, 1). Wilson 95% intervals shown.</p>
+    <p class="muted small">logit(observed) = <strong>${fit.a.toFixed(2)}</strong> + <strong>${fit.b.toFixed(2)}</strong> · logit(predicted) — ideal is (0, 1). Wilson 95% intervals shown. Click a dot to drill in.</p>
+    ${explain}
   `;
 }
 
@@ -771,6 +822,79 @@ function setupScenarios() {
       if (btn) togglePin(btn.dataset.player, false);
     });
   }
+  // Single delegated click handler on the whole dashboard for the
+  // aggregate-surface explainers. Order matters — the most specific
+  // selectors come first so they short-circuit.
+  const dash = $("#dashboard");
+  if (dash) {
+    dash.addEventListener("click", (e) => {
+      // Skip clicks on form controls inside any handled surface.
+      if (e.target.closest("input,button,select,a,textarea")) {
+        // Allow pin checkboxes & refresh button to handle themselves.
+        return;
+      }
+      // (1) Player Top-N link → mega-table jump
+      const playerLink = e.target.closest("#players-card .player-link");
+      if (playerLink) { jumpToPlayer(playerLink.dataset.player); return; }
+      // (2) Calibration dot
+      const calDot = e.target.closest("#calibration .cal-dot");
+      if (calDot) {
+        const b = Number(calDot.dataset.bin);
+        state.expandedCalibrationBin = state.expandedCalibrationBin === b ? null : b;
+        renderCalibration();
+        return;
+      }
+      // (3) History fan dot
+      const histDot = e.target.closest("#title-history .hist-dot");
+      if (histDot) {
+        const d = histDot.dataset.date;
+        state.expandedHistoryDate = state.expandedHistoryDate === d ? null : d;
+        renderHistoryFanChart();
+        return;
+      }
+      // (4) Backtest year
+      const btRow = e.target.closest("#backtest tr.bt-row-click");
+      if (btRow) {
+        const y = Number(btRow.dataset.year);
+        state.expandedBacktestYear = state.expandedBacktestYear === y ? null : y;
+        renderBacktest();
+        return;
+      }
+      // (5) Group standings team row
+      const grpRow = e.target.closest("#groups tr.group-team-row");
+      if (grpRow) {
+        const code = grpRow.dataset.team;
+        state.expandedGroupTeam = state.expandedGroupTeam === code ? null : code;
+        renderGroups();
+        return;
+      }
+      // (6) Team Market Matrix cell
+      const mxCell = e.target.closest("#team-matrix td.matrix-cell-wrap");
+      if (mxCell) {
+        const next = { code: mxCell.dataset.team, stageKey: mxCell.dataset.stage };
+        const open = state.expandedMatrix;
+        state.expandedMatrix = (open?.code === next.code && open?.stageKey === next.stageKey) ? null : next;
+        renderTeamMarketMatrix();
+        return;
+      }
+      // (7) Stage row
+      const stRow = e.target.closest("#stages tr.stage-row");
+      if (stRow) {
+        const code = stRow.dataset.team;
+        state.expandedStage = state.expandedStage === code ? null : code;
+        renderStages();
+        return;
+      }
+      // (8) Generic team item (Top-3 card / Distribution row / Market row)
+      const teamEl = e.target.closest("[data-team]");
+      if (teamEl) {
+        const code = teamEl.dataset.team;
+        state.expandedTeam = state.expandedTeam === code ? null : code;
+        renderTop3(); renderDistribution(); renderMarket();
+        return;
+      }
+    });
+  }
 }
 
 function togglePin(name, on) {
@@ -804,9 +928,17 @@ function renderHistoryFanChart() {
   const colors = ["#00d97e", "#ffd166", "#ef476f", "#7fa896", "#9b87f5", "#f59e0b"];
   const series = topCodes.map((code, i) => {
     const path = points.map((p, idx) => `${idx === 0 ? "M" : "L"}${x(new Date(p.date).getTime())},${y(p.titles?.[code] || 0)}`).join(" ");
+    const dotsHtml = points.map((p) => {
+      const px = x(new Date(p.date).getTime());
+      const py = y(p.titles?.[code] || 0);
+      return `<circle class="hist-dot" data-date="${escape(p.date)}" cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="3" fill="${colors[i]}" opacity="0.85"/>`;
+    }).join("");
     return `<g><path d="${path}" stroke="${colors[i]}" fill="none" stroke-width="2" opacity="0.85"/>
+       ${dotsHtml}
        <text x="${w - m + 4}" y="${y(points[points.length - 1].titles?.[code] || 0) + 4}" font-size="10" fill="${colors[i]}">${escape(teamName(code))}</text></g>`;
   }).join("");
+  const explainHtml = state.expandedHistoryDate
+    ? `<div class="explain-panel">${renderHistoryPointExplain(state.expandedHistoryDate)}</div>` : "";
   $("#title-history").innerHTML = `
     <svg viewBox="0 0 ${w + 60} ${h}" class="history-chart" aria-label="Title history">
       <line x1="${m}" y1="${h - m}" x2="${w - m}" y2="${h - m}" stroke="rgba(127,168,150,0.3)"/>
@@ -816,6 +948,7 @@ function renderHistoryFanChart() {
       <text x="${w - m - 60}" y="${h - 6}" font-size="10" fill="var(--muted)">${escape(new Date(xMax).toISOString().slice(0, 10))}</text>
       <text x="${m - 22}" y="${m + 10}" font-size="10" fill="var(--muted)">${(yMax * 100).toFixed(0)}%</text>
     </svg>
+    ${explainHtml}
   `;
 }
 
@@ -903,6 +1036,9 @@ async function bootstrap() {
   state.covariateProvider = state.schedule ? buildCovariateProvider(state.schedule) : null;
   state.titleHistory = await loadTitleHistory();
   state.playerProps = await loadPlayerProps();
+  state.freshness = await loadFreshness();
+  // Live data is best-effort and may 404 on platforms without the function.
+  state.live = await loadLive().catch(() => null);
   // 1. Fit DC on ALL historical matches (group + KO across all years).
   state.dcParams = fitDCOnHistorical(HISTORICAL_KNOCKOUTS, HISTORICAL_ELO, NEW_HISTORICAL_MATCHES);
   // 2. Squad-strength deltas.
@@ -912,9 +1048,14 @@ async function bootstrap() {
   state.calibration = calibrationBins(combined, HISTORICAL_ELO, state.dcParams, 8);
   // 4. Monte-Carlo for 2026.
   recompute();
+  // Diff against the previous visit (localStorage). Must run AFTER
+  // recompute() so state.blendedTitle / state.mc exist.
+  state.prev = restorePrev();
+  state.diff = state.prev ? diffSnapshots(state.prev, cloneCurrentSnapshot()) : null;
 }
 
 function renderAll() {
+  renderFreshnessBanner();
   renderTop3();
   renderModelBreakdown();
   renderDistribution();
@@ -929,6 +1070,526 @@ function renderAll() {
   renderContext();
   renderMethodology();
   fireConfetti();
+}
+
+/* ─────────── Freshness banner + diff + live polling ─────────── */
+
+const PREV_STORAGE_KEY = "wc26_prev_snapshot_v1";
+const DIFF_THRESHOLD = 0.0005;  // 0.05 pp — below this we treat as noise
+
+function cloneCurrentSnapshot() {
+  if (!state.mc) return null;
+  const blended = state.blendedTitle || state.mc.titleProbability;
+  const stagesMap = {};
+  for (const key of ["r32Probability", "r16Probability", "quartersProbability", "semisProbability", "finalsProbability", "titleProbability"]) {
+    stagesMap[key] = { ...(state.mc[key] || {}) };
+  }
+  return {
+    asOf: state.freshness?.writtenAt || new Date().toISOString(),
+    title: { ...blended },
+    stages: stagesMap,
+    market: { ...(state.marketProbs || {}) },
+  };
+}
+
+function persistPrev(snap) {
+  if (!snap) return;
+  try { localStorage.setItem(PREV_STORAGE_KEY, JSON.stringify(snap)); } catch { /* quota */ }
+}
+
+function restorePrev() {
+  try {
+    const raw = localStorage.getItem(PREV_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function diffSnapshots(prev, current) {
+  if (!prev || !current) return null;
+  const out = { totalChanges: 0, title: {}, stages: {}, market: {} };
+  const diffMap = (a, b, target) => {
+    let n = 0;
+    const codes = new Set([...Object.keys(a || {}), ...Object.keys(b || {})]);
+    for (const code of codes) {
+      const d = (b[code] || 0) - (a[code] || 0);
+      if (Math.abs(d) > DIFF_THRESHOLD) {
+        target[code] = d;
+        n++;
+      }
+    }
+    return n;
+  };
+  out.totalChanges += diffMap(prev.title, current.title, out.title);
+  for (const key of Object.keys(current.stages || {})) {
+    out.stages[key] = {};
+    out.totalChanges += diffMap(prev.stages?.[key] || {}, current.stages[key] || {}, out.stages[key]);
+  }
+  out.totalChanges += diffMap(prev.market, current.market, out.market);
+  return out;
+}
+
+function trendArrow(code, kind = "title") {
+  const d = state.diff;
+  if (!d) return "";
+  const map = kind === "market" ? d.market
+    : kind === "title" ? d.title
+    : d.stages?.[kind];  // pass a stage key like "titleProbability"
+  const delta = map?.[code];
+  if (delta == null) return "";
+  const sign = delta >= 0 ? "↑" : "↓";
+  const cls = delta >= 0 ? "trend-up" : "trend-down";
+  return `<span class="trend ${cls}">${sign} ${(Math.abs(delta) * 100).toFixed(1)} pp</span>`;
+}
+
+function renderFreshnessBanner() {
+  const dict = t();
+  const banner = $("#freshness-banner");
+  if (!banner) return;
+  const fr = state.freshness;
+  if (!fr) { banner.hidden = true; return; }
+  banner.hidden = false;
+  const writtenAt = fr.writtenAt || fr.market || fr.titleHistory;
+  const mins = writtenAt ? Math.max(0, Math.round((Date.now() - new Date(writtenAt).getTime()) / 60000)) : null;
+  const changes = state.diff?.totalChanges || 0;
+  const fb = dict.freshness || {};
+  const minsLabel = mins == null ? "—" : `${mins}`;
+  const bannerText = typeof fb.banner === "function" ? fb.banner(minsLabel, changes) : `Last update ${minsLabel} min ago · ${changes} changes since your last visit`;
+  $("#fb-text").textContent = bannerText;
+  const refreshLabel = state.refreshing ? (fb.refreshing || "Refreshing…") : (fb.refreshBtn || "Refresh now");
+  const btn = $("#fb-refresh");
+  if (btn) { btn.textContent = refreshLabel; btn.classList.toggle("spinning", !!state.refreshing); }
+  // Live status sub-line
+  const liveStatusEl = $("#fb-live-status");
+  if (liveStatusEl) {
+    let txt = "";
+    let cls = "";
+    if (state.live?.status === "no-source") txt = fb.liveNoSource || "Live-Mode pending — no source configured yet";
+    else if (state.livePolling) { txt = fb.liveActive || "Live · matches in progress"; cls = "active"; }
+    else if (liveWindowActive()) { txt = fb.liveActive || "Live"; cls = "active"; }
+    else txt = fb.liveIdle || "";
+    liveStatusEl.textContent = txt;
+    liveStatusEl.classList.toggle("active", cls === "active");
+  }
+}
+
+function wireRefreshButton() {
+  const btn = $("#fb-refresh");
+  if (!btn || btn.dataset.wired) return;
+  btn.dataset.wired = "1";
+  btn.addEventListener("click", async () => {
+    if (state.refreshing) return;
+    state.refreshing = true;
+    renderFreshnessBanner();
+    // Persist current as the new baseline BEFORE refreshing, so the next
+    // diff is "since this refresh click", not "since first boot".
+    persistPrev(cloneCurrentSnapshot());
+    state.prev = restorePrev();
+    // Re-fetch all volatile data in parallel.
+    const [market, history, props, freshness, live] = await Promise.all([
+      loadMarketSnapshot(),
+      loadTitleHistory(),
+      loadPlayerProps(),
+      loadFreshness(),
+      loadLive().catch(() => null),
+    ]);
+    if (market) {
+      state.marketSnapshot = market;
+      const raw = market.aggregated || MARKET_ODDS_2026;
+      state.marketProbs = powerTransform(raw, state.marketGamma);
+    }
+    if (history) state.titleHistory = history;
+    if (props) state.playerProps = props;
+    if (freshness) state.freshness = freshness;
+    if (live) state.live = live;
+    recompute();
+    state.diff = diffSnapshots(state.prev, cloneCurrentSnapshot());
+    state.refreshing = false;
+    renderAll();
+    startLivePollingIfActive();
+  });
+}
+
+// Predicate: any scheduled match where now is between kickoff and kickoff+2h.
+function liveWindowActive() {
+  if (!state.schedule) return false;
+  const now = Date.now();
+  const twoHours = 2 * 3600 * 1000;
+  for (const m of state.schedule) {
+    if (!m.kickoffUTC) continue;
+    const k = new Date(m.kickoffUTC).getTime();
+    if (k <= now && now - k <= twoHours) return true;
+  }
+  return false;
+}
+
+function startLivePollingIfActive() {
+  const active = liveWindowActive();
+  if (active && !state.livePolling) {
+    state.livePolling = setInterval(pollLive, 30_000);
+  } else if (!active && state.livePolling) {
+    clearInterval(state.livePolling);
+    state.livePolling = null;
+  }
+}
+
+async function pollLive() {
+  if (state.liveAbort) state.liveAbort.abort();
+  state.liveAbort = new AbortController();
+  const live = await loadLive(state.liveAbort.signal);
+  if (live) state.live = live;
+  renderFreshnessBanner();
+}
+
+/* ─────────── Explainer panels (shared by all aggregate surfaces) ─────────── */
+
+// Renders a 4-block decomposition of a team's title forecast: model
+// components, raw inputs, surprise/CI, trend vs last visit.
+function renderTeamExplainPanel(code) {
+  const dict = t();
+  const exp = dict.explain || {};
+  const titleP = (state.blendedTitle || state.mc.titleProbability)[code] || 0;
+  const ensembleP = state.mc.titleProbability[code] || 0;
+  const marketP = state.marketProbs?.[code] ?? MARKET_ODDS_2026[code] ?? 0;
+  const elo = ELO_2026[code] || 0;
+  const squad = SQUAD_INDEX_2026?.[code];
+  const squadDelta = state.squadDelta?.[code] || 0;
+  const host = hostCodes.includes(code);
+  const iter = state.mc.iterations || 0;
+  const se = iter > 0 ? Math.sqrt(titleP * (1 - titleP) / iter) : 0;
+  const ci = se ? `[${pct(Math.max(0, titleP - 1.96 * se), 1)}, ${pct(Math.min(1, titleP + 1.96 * se), 1)}]` : "—";
+  const bits = titleP > 0 ? -Math.log2(titleP) : Infinity;
+  const trend = state.diff?.title?.[code];
+  const w = (state.mc.weights || DEFAULT_WEIGHTS);
+  return `
+    <div class="detail-grid">
+      <div class="detail-block">
+        <h5>${escape(exp.componentBreakdown || "Component decomposition")}</h5>
+        <ul class="detail-list">
+          <li><span>${escape(exp.squadAdj || "Ensemble (current)")} <span class="muted small">(${(w.elo * 100).toFixed(0)}+${(w.dc * 100).toFixed(0)}+${(w.squad * 100).toFixed(0)} %)</span></span><b>${pct(ensembleP, 2)}</b></li>
+          <li><span>${escape(exp.marketShare || "Market")} <span class="muted small">(${(w.market * 100).toFixed(0)} %)</span></span><b>${pct(marketP, 2)}</b></li>
+          <li><span>${escape(exp.blended || "Blended")}</span><b>${pct(titleP, 2)}</b></li>
+        </ul>
+      </div>
+      <div class="detail-block">
+        <h5>${escape(exp.componentBreakdown ? "Inputs" : "Inputs")}</h5>
+        <ul class="detail-list">
+          <li><span>${escape(exp.eloRating || "Elo rating")}</span><b>${Math.round(elo)}</b></li>
+          ${squad != null ? `<li><span>${escape(exp.squadIndex || "Squad index")}</span><b>${(squad * 100).toFixed(1)} %</b></li>` : ""}
+          <li><span>${escape(exp.squadDelta || "Squad delta")}</span><b>${squadDelta >= 0 ? "+" : ""}${squadDelta.toFixed(0)} Elo</b></li>
+          ${host ? `<li><span>${escape(exp.hostBonus || "Host bonus")}</span><b>+80 Elo</b></li>` : ""}
+        </ul>
+      </div>
+      <div class="detail-block">
+        <h5>Uncertainty</h5>
+        <ul class="detail-list">
+          <li><span>${escape(exp.surpriseBits || "Surprise (bits)")}</span><b>${Number.isFinite(bits) ? bits.toFixed(2) : "∞"}</b></li>
+          <li><span>${escape(exp.ci95 || "95% CI")}</span><b>${ci}</b></li>
+          <li><span>MC iterations</span><b>${iter.toLocaleString()}</b></li>
+        </ul>
+      </div>
+      <div class="detail-block">
+        <h5>${escape(exp.trendSnapshot || "Change since last visit")}</h5>
+        <p class="muted small" style="margin:0">${trend == null ? (dict.freshness?.liveIdle || "—") : (trend >= 0 ? "+" : "−") + (Math.abs(trend) * 100).toFixed(2) + " pp"}</p>
+      </div>
+    </div>`;
+}
+
+function renderStageExplainPanel(code) {
+  const dict = t();
+  const exp = dict.explain || {};
+  const stages = [
+    { key: "r32Probability",     label: "R32" },
+    { key: "r16Probability",     label: "R16" },
+    { key: "quartersProbability",label: "QF" },
+    { key: "semisProbability",   label: "SF" },
+    { key: "finalsProbability",  label: "F" },
+    { key: "titleProbability",   label: "Title" },
+  ];
+  const probs = stages.map((s) => state.mc[s.key]?.[code] || 0);
+  const chainRows = stages.map((s, i) => {
+    const p = probs[i];
+    const cond = i === 0 ? p : (probs[i - 1] > 0 ? probs[i] / probs[i - 1] : 0);
+    const tr = state.diff?.stages?.[s.key]?.[code];
+    const trHtml = tr == null ? "" : `<span class="trend ${tr >= 0 ? "trend-up" : "trend-down"}">${tr >= 0 ? "↑" : "↓"} ${(Math.abs(tr) * 100).toFixed(1)} pp</span>`;
+    return `<li><span>${s.label}</span><b>${pct(p, 2)} ${i > 0 ? `<span class="muted small">×${(cond * 100).toFixed(0)} %</span>` : ""}${trHtml}</b></li>`;
+  }).join("");
+  const elo = ELO_2026[code] || 0;
+  const squadDelta = state.squadDelta?.[code] || 0;
+  const gpd = state.mc.groupPositionDistribution?.[code];
+  let groupRows = "";
+  if (gpd && gpd.total) {
+    const positions = ["p1","p2","p3","p4"];
+    groupRows = positions.map((k, i) => `<li><span>P${i + 1}</span><b>${((gpd[k] || 0) / gpd.total * 100).toFixed(1)} %</b></li>`).join("");
+  }
+  return `
+    <div class="detail-grid">
+      <div class="detail-block">
+        <h5>${escape(exp.stageChain || "Stage-by-stage conditional drop")}</h5>
+        <ul class="detail-list">${chainRows}</ul>
+      </div>
+      <div class="detail-block">
+        <h5>${escape(exp.positionDist || "Final-position distribution")}</h5>
+        ${groupRows ? `<ul class="detail-list">${groupRows}</ul>` : `<p class="muted small">${escape(dict.freshness?.liveIdle || "—")}</p>`}
+      </div>
+      <div class="detail-block">
+        <h5>Inputs</h5>
+        <ul class="detail-list">
+          <li><span>${escape(exp.eloRating || "Elo rating")}</span><b>${Math.round(elo)}</b></li>
+          <li><span>${escape(exp.squadDelta || "Squad delta")}</span><b>${squadDelta >= 0 ? "+" : ""}${squadDelta.toFixed(0)} Elo</b></li>
+          ${hostCodes.includes(code) ? `<li><span>${escape(exp.hostBonus || "Host bonus")}</span><b>+80 Elo</b></li>` : ""}
+        </ul>
+      </div>
+    </div>`;
+}
+
+function renderMatrixCellExplain(code, stageKey) {
+  const dict = t();
+  const exp = dict.explain || {};
+  const modelP = state.mc[stageKey]?.[code] ?? 0;
+  // Match the team-matrix mapping for market keys.
+  const stageToMarket = {
+    titleProbability: "titleAggregated",
+    finalsProbability: "finalsAggregated",
+    semisProbability: "semisAggregated",
+    quartersProbability: "quartersAggregated",
+    r16Probability: "r16Aggregated",
+    groupAdvanceProbability: "topTwoAggregated",
+    groupPositionDistribution: "groupWinnerAggregated",
+  };
+  const snap = state.marketSnapshot;
+  const marketKey = stageToMarket[stageKey];
+  const marketP = (snap?.[marketKey] || snap?.aggregated || {})[code];
+  const sources = Array.isArray(snap?.sources) ? snap.sources : [];
+  const perBook = sources.map((s) => {
+    const dec = s.odds?.[code];
+    if (dec == null) return null;
+    return `<li><span>${escape(s.book || s.name || "?")}</span><b>${typeof dec === "number" ? dec.toFixed(2) : dec}</b></li>`;
+  }).filter(Boolean).join("");
+  const diff = marketP == null ? null : (modelP - marketP);
+  return `
+    <div class="detail-grid">
+      <div class="detail-block">
+        <h5>${escape(exp.componentBreakdown || "Component decomposition")}</h5>
+        <ul class="detail-list">
+          <li><span>Model</span><b>${pct(modelP, 2)}</b></li>
+          <li><span>${escape(exp.marketShare || "Market")}</span><b>${marketP == null ? "n/v" : pct(marketP, 2)}</b></li>
+          ${diff == null ? "" : `<li><span>Diff</span><b>${diff >= 0 ? "+" : "−"}${(Math.abs(diff) * 100).toFixed(1)} pp</b></li>`}
+        </ul>
+      </div>
+      <div class="detail-block">
+        <h5>${escape(exp.perBookmaker || "Per-bookmaker quotes")}</h5>
+        ${perBook ? `<ul class="detail-list">${perBook}</ul>` : `<p class="muted small">${escape(exp.sourcesNote || "Per-source breakdown not available for this stage")}</p>`}
+      </div>
+      <div class="detail-block">
+        <h5>${escape(exp.aggregation || "Aggregation")}</h5>
+        <ul class="detail-list">
+          <li><span>${escape(exp.logitMean || "Logit-mean across books")}</span><b>${escape(snap?.method ? "✓" : "—")}</b></li>
+          <li><span>${escape(exp.gammaTransform || "γ-transform")}</span><b>${(state.marketGamma || 1).toFixed(2)}</b></li>
+        </ul>
+      </div>
+    </div>`;
+}
+
+function renderGroupTeamExplain(code) {
+  const dict = t();
+  const exp = dict.explain || {};
+  // Find this team's group + opponents.
+  let opponents = [];
+  for (const [, codes] of Object.entries(GROUPS_2026)) {
+    if (codes.includes(code)) { opponents = codes.filter((c) => c !== code); break; }
+  }
+  // Use matchProbs with current ensemble context.
+  const ctx = {
+    weights: state.mc?.weights || DEFAULT_WEIGHTS,
+    squadDelta: state.options.useSquad ? state.squadDelta : null,
+    dcParams: state.options.useDC ? state.dcParams : null,
+    eloMap: ELO_2026,
+    hostCodes,
+    options: state.options,
+  };
+  let expPts = 0;
+  const pairwiseRows = opponents.map((opp) => {
+    let probs = { home: 0, draw: 0, away: 0 };
+    try {
+      const res = matchProbs({ code }, { code: opp }, ctx);
+      if (res?.ensemble) probs = res.ensemble;
+    } catch { /* leave zero */ }
+    const ePts = 3 * probs.home + 1 * probs.draw;
+    expPts += ePts;
+    return `<tr>
+      <td>${escape(teamName(opp))}</td>
+      <td class="num">${pct(probs.home, 0)}</td>
+      <td class="num">${pct(probs.draw, 0)}</td>
+      <td class="num">${pct(probs.away, 0)}</td>
+      <td class="num">${ePts.toFixed(2)}</td>
+    </tr>`;
+  }).join("");
+  const gpd = state.mc.groupPositionDistribution?.[code];
+  let posRows = "";
+  if (gpd && gpd.total) {
+    const positions = [["p1","P1"],["p2","P2"],["p3","P3"],["p4","P4"]];
+    posRows = positions.map(([k, lab]) => `<li><span>${lab}</span><b>${((gpd[k] || 0) / gpd.total * 100).toFixed(1)} %</b></li>`).join("");
+  }
+  return `
+    <div class="detail-grid">
+      <div class="detail-block" style="grid-column:span 2">
+        <h5>${escape(exp.pairwise || "Pairwise expected results")}</h5>
+        <table class="stages-table">
+          <thead><tr><th>Opp</th><th>W</th><th>D</th><th>L</th><th>E[Pts]</th></tr></thead>
+          <tbody>${pairwiseRows}</tbody>
+        </table>
+      </div>
+      <div class="detail-block">
+        <h5>${escape(exp.expectedPoints || "Expected points")}</h5>
+        <ul class="detail-list"><li><span>Total</span><b>${expPts.toFixed(2)}</b></li></ul>
+      </div>
+      <div class="detail-block">
+        <h5>${escape(exp.positionDist || "Final-position distribution")}</h5>
+        ${posRows ? `<ul class="detail-list">${posRows}</ul>` : `<p class="muted small">—</p>`}
+      </div>
+    </div>`;
+}
+
+function renderBacktestYearExplain(year) {
+  const dict = t();
+  const exp = dict.explain || {};
+  // Per-match recompute, lazy + cached.
+  if (!state.backtestPerMatch[year]) {
+    const combined = buildCombinedTournaments();
+    const tour = (combined || []).find((t) => t.year === year);
+    const matches = tour?.matches || [];
+    const eloMap = HISTORICAL_ELO[year] || ELO_2026;
+    const tourHosts = Array.isArray(tour?.host) ? tour.host : [tour?.host].filter(Boolean);
+    const ctx = {
+      dcParams: state.dcParams,
+      squadDelta: state.squadDelta,
+      eloMap,
+      hostCodes: tourHosts,
+      options: { useHost: true, useSquad: true, useDC: true, useCovariates: false },
+    };
+    const out = [];
+    for (const m of matches) {
+      try {
+        const res = matchProbs({ code: m.teamA }, { code: m.teamB }, ctx);
+        const probs = res?.ensemble;
+        if (!probs) continue;
+        const outcome = m.scoreA > m.scoreB ? 0 : m.scoreA < m.scoreB ? 2 : 1;
+        const triplet = [probs.home, probs.draw, probs.away];
+        const cumPred = [triplet[0], triplet[0] + triplet[1]];
+        const obs = [outcome === 0 ? 1 : 0, outcome <= 1 ? 1 : 0];
+        const rps = 0.5 * ((cumPred[0] - obs[0]) ** 2 + (cumPred[1] - obs[1]) ** 2);
+        out.push({ teamA: m.teamA, teamB: m.teamB, scoreA: m.scoreA, scoreB: m.scoreB, probs: triplet, rps });
+      } catch { /* skip */ }
+    }
+    state.backtestPerMatch[year] = out;
+  }
+  const matches = state.backtestPerMatch[year];
+  const best = matches.slice().sort((a, b) => a.rps - b.rps).slice(0, 3);
+  const worst = matches.slice().sort((a, b) => b.rps - a.rps).slice(0, 3);
+  const renderRow = (m) => `<tr>
+    <td>${escape(teamName(m.teamA))} ${m.scoreA}–${m.scoreB} ${escape(teamName(m.teamB))}</td>
+    <td class="num">${pct(m.probs[0], 0)}/${pct(m.probs[1], 0)}/${pct(m.probs[2], 0)}</td>
+    <td class="num">${m.rps.toFixed(3)}</td>
+  </tr>`;
+  return `
+    <div class="detail-grid">
+      <div class="detail-block">
+        <h5>${escape(exp.matchByMatch || "Per-match predictions")}</h5>
+        <p class="muted small">${matches.length} matches analysed</p>
+      </div>
+      <div class="detail-block">
+        <h5>${escape(exp.bestPredicted || "Best-predicted")}</h5>
+        <table class="stages-table"><tbody>${best.map(renderRow).join("")}</tbody></table>
+      </div>
+      <div class="detail-block">
+        <h5>${escape(exp.worstPredicted || "Worst-predicted")}</h5>
+        <table class="stages-table"><tbody>${worst.map(renderRow).join("")}</tbody></table>
+      </div>
+    </div>`;
+}
+
+function renderCalibrationBinExplain(binIdx) {
+  const dict = t();
+  const exp = dict.explain || {};
+  const cells = state.calibration || [];
+  const bin = cells[binIdx];
+  if (!bin) return `<p class="muted small">—</p>`;
+  const total = cells.length || 8;
+  const lo = binIdx / total;
+  const hi = (binIdx + 1) / total;
+  // Wilson 95% CI on observed
+  const n = bin.n || 0;
+  const p = n > 0 ? (bin.observed || 0) : 0;
+  const z = 1.96;
+  const denom = 1 + z * z / Math.max(1, n);
+  const centre = (p + z * z / (2 * Math.max(1, n))) / denom;
+  const margin = z * Math.sqrt((p * (1 - p) + z * z / (4 * Math.max(1, n))) / Math.max(1, n)) / denom;
+  const wLo = Math.max(0, centre - margin);
+  const wHi = Math.min(1, centre + margin);
+  return `
+    <div class="detail-grid">
+      <div class="detail-block">
+        <h5>${escape(exp.binRange || "Predicted-probability range")}</h5>
+        <ul class="detail-list">
+          <li><span>Range</span><b>[${(lo * 100).toFixed(1)}%, ${(hi * 100).toFixed(1)}%]</b></li>
+          <li><span>n</span><b>${n}</b></li>
+          <li><span>Mean predicted</span><b>${pct(bin.midPred || 0, 1)}</b></li>
+          <li><span>Observed</span><b>${pct(bin.observed || 0, 1)}</b></li>
+        </ul>
+      </div>
+      <div class="detail-block">
+        <h5>${escape(exp.wilsonDeriv || "Wilson 95% interval")}</h5>
+        <ul class="detail-list">
+          <li><span>z</span><b>1.96</b></li>
+          <li><span>Lower</span><b>${pct(wLo, 1)}</b></li>
+          <li><span>Upper</span><b>${pct(wHi, 1)}</b></li>
+        </ul>
+        <p class="muted small">p̂ ± z·√(p̂(1−p̂)/n) (Wilson form)</p>
+      </div>
+    </div>`;
+}
+
+function renderHistoryPointExplain(date) {
+  const dict = t();
+  const exp = dict.explain || {};
+  const points = state.titleHistory || [];
+  const pt = points.find((p) => p.date === date);
+  if (!pt) return `<p class="muted small">—</p>`;
+  const titles = pt.titles || {};
+  const rows = Object.entries(titles)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([code, p]) => `<li><span>${escape(teamName(code))}</span><b>${pct(p, 1)}</b></li>`)
+    .join("");
+  return `
+    <div class="detail-grid">
+      <div class="detail-block">
+        <h5>${escape(exp.snapshotTitles || "All title probabilities at this date")}</h5>
+        <p class="muted small">${date}</p>
+        <ul class="detail-list">${rows}</ul>
+      </div>
+      <div class="detail-block">
+        <h5>${escape(exp.sourcesAtDate || "Sources contributing")}</h5>
+        <p class="muted small">${escape(exp.sourcesNote || "Per-source breakdown not preserved for historical dates")}</p>
+      </div>
+    </div>`;
+}
+
+// Player Top-N link → scroll mega-table to the player + auto-expand.
+function jumpToPlayer(name) {
+  state.expandedPlayer = name;
+  renderPlayerMegaTable();
+  requestAnimationFrame(() => {
+    const sel = `tr.player-row[data-player="${CSS.escape(name)}"]`;
+    const row = document.querySelector(sel);
+    if (row) {
+      row.scrollIntoView({ behavior: "smooth", block: "center" });
+      row.classList.add("row-flash");
+      setTimeout(() => row.classList.remove("row-flash"), 1300);
+    }
+  });
 }
 
 /* ─────────── Player predictions ─────────── */
@@ -955,7 +1616,7 @@ function renderPlayers() {
     .slice(0, 10);
   const gbMax = gb[0]?.pGoldenBoot || 0.01;
   $("#players-goldenboot").innerHTML = gb.map((r) => `
-    <div class="dist-row">
+    <div class="dist-row player-link" data-player="${escape(r.name)}">
       <div class="dist-team">${escape(r.name)} <span class="muted small">${escape(teamName(teamCodeOf(r.name)) || "—")}</span></div>
       <div class="dist-bar"><div class="dist-fill" style="width:${(r.pGoldenBoot / gbMax) * 100}%"></div></div>
       <div class="dist-prob">${pct(r.pGoldenBoot, 2)}</div>
@@ -1374,7 +2035,7 @@ function renderPlayerCards() {
         <th>${escape(cols.suspended)}</th>
       </tr></thead>
       <tbody>${byYellow.map((row, i) => `
-        <tr>
+        <tr class="player-link" data-player="${escape(row.name)}">
           <td>${i + 1}</td>
           <td>${escape(row.name)}</td>
           <td class="muted">${escape(teamName(teamCodeOf(row.name)) || "—")}</td>
@@ -1435,7 +2096,7 @@ function renderPlayerPropMarket(kind) {
         <th>${escape(cols.diff)}</th>
       </tr></thead>
       <tbody>${rows.map((r, i) => `
-        <tr>
+        <tr class="player-link" data-player="${escape(r.name)}">
           <td>${i + 1}</td>
           <td>${escape(r.name)}</td>
           <td class="muted">${escape(teamName(r.team) || "—")}</td>
@@ -1518,6 +2179,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     $("#loading").hidden = true;
     $("#dashboard").hidden = false;
     renderAll();
+    wireRefreshButton();
+    startLivePollingIfActive();
+    // Persist the current snapshot so the NEXT visit can diff against it.
+    persistPrev(cloneCurrentSnapshot());
     // Auto-run the per-player MC so players/cards/markets show up
     // immediately without the user having to flip a toggle.
     const playersToggle = $("#players-toggle");
