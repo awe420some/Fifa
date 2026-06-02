@@ -16,7 +16,7 @@
 
 import { PLAYERS_2026 } from "../data/players-2026.js";
 
-const DEFAULT_MIN_SHARE = {
+export const DEFAULT_MIN_SHARE = {
   GK: 1.0,
   DEF: 0.65,
   MID: 0.60,

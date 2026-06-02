@@ -431,12 +431,17 @@ export function runEnsembleMonteCarlo(teams, groups, hostCodes, eloMap, options 
   // Player aggregation state (only if trackPlayers).
   const playerGoals = ctx.playerShares ? new Map() : null;
   const playerAssists = ctx.playerShares ? new Map() : null;
-  const playerMinutes = ctx.playerShares ? new Map() : null;
   const playerMatchesWithGoal = ctx.playerShares ? new Map() : null;
   const goldenBoot = ctx.playerShares ? new Map() : null;
   const playerYellow = ctx.playerShares ? new Map() : null;
   const playerRed = ctx.playerShares ? new Map() : null;
   const playerSuspended = ctx.playerShares ? new Map() : null;
+  // Per-player goal-minute bins: Map<name, Map<binLabel, count>>.
+  const playerMinuteBins = ctx.playerShares ? new Map() : null;
+  // Per-player tournament goal-count histogram: Map<name, Int32Array(6)>
+  // where index 0..4 = exactly k goals, index 5 = 5+. Index 0 stays 0 and
+  // P(0) is derived as the complement at summarize time.
+  const playerGoalHist = ctx.playerShares ? new Map() : null;
   let sampleRun = null;
 
   for (let i = 0; i < iterations; i++) {
@@ -463,7 +468,7 @@ export function runEnsembleMonteCarlo(teams, groups, hostCodes, eloMap, options 
       }
     }
     if (ctx.playerShares) {
-      aggregatePlayerEvents(r, { playerGoals, playerAssists, playerMinutes, playerMatchesWithGoal, goldenBoot, playerYellow, playerRed, playerSuspended });
+      aggregatePlayerEvents(r, { playerGoals, playerAssists, playerMatchesWithGoal, goldenBoot, playerYellow, playerRed, playerSuspended, playerMinuteBins, playerGoalHist });
     }
     if (i === 0) sampleRun = r;
   }
@@ -483,9 +488,10 @@ export function runEnsembleMonteCarlo(teams, groups, hostCodes, eloMap, options 
   };
   if (ctx.playerShares) {
     result.players = summarizePlayers({
-      playerGoals, playerAssists, playerMinutes,
+      playerGoals, playerAssists,
       playerMatchesWithGoal, goldenBoot,
       playerYellow, playerRed, playerSuspended,
+      playerMinuteBins, playerGoalHist,
       iterations,
     });
   }
@@ -496,16 +502,29 @@ function aggregatePlayerEvents(r, agg) {
   const perIterGoals = new Map();
   const perIterYellow = new Map();
   const perIterRed = new Map();
+  // scorersA[i] scored at minute bin minutesA[i] — parallel arrays. We
+  // tally each goal's minute against the scorer so per-player minute
+  // profiles are available downstream.
+  const tallyScorerMinutes = (scorers, minutes) => {
+    for (let i = 0; i < scorers.length; i++) {
+      const name = scorers[i];
+      if (!name) continue;
+      bumpName(agg.playerGoals, name);
+      perIterGoals.set(name, (perIterGoals.get(name) || 0) + 1);
+      const bin = minutes[i];
+      if (bin) {
+        let inner = agg.playerMinuteBins.get(name);
+        if (!inner) { inner = new Map(); agg.playerMinuteBins.set(name, inner); }
+        inner.set(bin.label, (inner.get(bin.label) || 0) + 1);
+      }
+    }
+  };
   const tally = (events) => {
     if (!events) return;
-    for (const name of events.scorersA) if (name) bumpName(agg.playerGoals, name);
-    for (const name of events.scorersB) if (name) bumpName(agg.playerGoals, name);
+    tallyScorerMinutes(events.scorersA, events.minutesA);
+    tallyScorerMinutes(events.scorersB, events.minutesB);
     for (const name of events.assistsA) if (name) bumpName(agg.playerAssists, name);
     for (const name of events.assistsB) if (name) bumpName(agg.playerAssists, name);
-    for (const bin of events.minutesA) if (bin) bumpBin(agg.playerMinutes, bin.label);
-    for (const bin of events.minutesB) if (bin) bumpBin(agg.playerMinutes, bin.label);
-    for (const name of events.scorersA) if (name) perIterGoals.set(name, (perIterGoals.get(name) || 0) + 1);
-    for (const name of events.scorersB) if (name) perIterGoals.set(name, (perIterGoals.get(name) || 0) + 1);
     for (const name of (events.yellowsA || [])) if (name) {
       bumpName(agg.playerYellow, name);
       perIterYellow.set(name, (perIterYellow.get(name) || 0) + 1);
@@ -528,6 +547,14 @@ function aggregatePlayerEvents(r, agg) {
     for (const m of round.matches || []) tally(m.events);
   }
   for (const name of perIterGoals.keys()) bumpName(agg.playerMatchesWithGoal, name);
+  // Tournament goal-count histogram: bucket each scorer's per-iteration
+  // total into index min(g,5). P(0) is the complement of "scored ≥1",
+  // so we never touch non-scoring players (keeps the map sparse).
+  for (const [name, g] of perIterGoals) {
+    let hist = agg.playerGoalHist.get(name);
+    if (!hist) { hist = new Int32Array(6); agg.playerGoalHist.set(name, hist); }
+    hist[Math.min(g, 5)]++;
+  }
   // Suspension proxy: ≥2 yellow cards or ≥1 red card in this tournament.
   // We don't simulate the "actually banned next match" dynamic; this is
   // the at-risk probability.
@@ -547,11 +574,8 @@ function aggregatePlayerEvents(r, agg) {
 function bumpName(map, name) {
   map.set(name, (map.get(name) || 0) + 1);
 }
-function bumpBin(map, label) {
-  map.set(label, (map.get(label) || 0) + 1);
-}
 
-function summarizePlayers({ playerGoals, playerAssists, playerMinutes, playerMatchesWithGoal, goldenBoot, playerYellow, playerRed, playerSuspended, iterations }) {
+function summarizePlayers({ playerGoals, playerAssists, playerMatchesWithGoal, goldenBoot, playerYellow, playerRed, playerSuspended, playerMinuteBins, playerGoalHist, iterations }) {
   const out = {};
   // Expected tournament goals/assists/cards per player = total / iterations.
   // P(Golden Boot)  = sharedGoldenBootCount / iterations.
@@ -563,6 +587,9 @@ function summarizePlayers({ playerGoals, playerAssists, playerMinutes, playerMat
     ...(playerYellow ? playerYellow.keys() : []),
     ...(playerRed ? playerRed.keys() : []),
   ]);
+  // Accumulate the global minute distribution from the per-player bins.
+  const globalMinutes = {};
+  let totalGoalsAcrossPlayers = 0;
   const players = [];
   for (const name of allNames) {
     const goals = playerGoals.get(name) || 0;
@@ -572,6 +599,38 @@ function summarizePlayers({ playerGoals, playerAssists, playerMinutes, playerMat
     const yellow = playerYellow ? (playerYellow.get(name) || 0) : 0;
     const red = playerRed ? (playerRed.get(name) || 0) : 0;
     const suspended = playerSuspended ? (playerSuspended.get(name) || 0) : 0;
+    // Per-player minute distribution, normalised over this player's own
+    // sampled goals. Empty object when the player never scored.
+    const binMap = playerMinuteBins ? playerMinuteBins.get(name) : null;
+    const minuteBins = {};
+    let playerGoalTotal = 0;
+    if (binMap) {
+      for (const [label, n] of binMap) {
+        playerGoalTotal += n;
+        globalMinutes[label] = (globalMinutes[label] || 0) + n;
+      }
+      totalGoalsAcrossPlayers += playerGoalTotal;
+      if (playerGoalTotal > 0) {
+        for (const [label, n] of binMap) minuteBins[label] = n / playerGoalTotal;
+      }
+    }
+    // Tournament goal-count distribution. hist[k] = iters with exactly k
+    // goals (k=1..4), hist[5] = 5+. P(0) is the complement.
+    const hist = playerGoalHist ? playerGoalHist.get(name) : null;
+    let scoredIters = 0;
+    const pExact = new Array(6).fill(0);
+    if (hist) {
+      for (let k = 1; k <= 5; k++) { scoredIters += hist[k]; pExact[k] = hist[k] / iterations; }
+    }
+    pExact[0] = 1 - scoredIters / iterations;
+    const goalDist = {
+      p0: pExact[0],
+      p1: pExact[1],
+      p2plus: pExact[2] + pExact[3] + pExact[4] + pExact[5],
+      pHat: pExact[3] + pExact[4] + pExact[5],
+      pExact,
+      sampled: hist ? (hist[1] + 2 * hist[2] + 3 * hist[3] + 4 * hist[4] + 5 * hist[5]) : 0,
+    };
     players.push({
       name,
       expGoals: goals / iterations,
@@ -581,21 +640,17 @@ function summarizePlayers({ playerGoals, playerAssists, playerMinutes, playerMat
       expYellow: yellow / iterations,
       expRed: red / iterations,
       pSuspended: suspended / iterations,
+      minuteBins,
+      goalDist,
     });
   }
   players.sort((a, b) => b.expGoals - a.expGoals);
   out.players = players;
-  // Minute distribution aggregated over all goals.
-  const minutes = {};
-  let totalGoalsAcrossPlayers = 0;
-  for (const [label, n] of playerMinutes) {
-    minutes[label] = n;
-    totalGoalsAcrossPlayers += n;
-  }
+  // Global minute distribution = sum of all per-player bins, normalised.
   out.minuteDistribution = {};
-  for (const label of Object.keys(minutes)) {
+  for (const label of Object.keys(globalMinutes)) {
     out.minuteDistribution[label] = totalGoalsAcrossPlayers
-      ? minutes[label] / totalGoalsAcrossPlayers
+      ? globalMinutes[label] / totalGoalsAcrossPlayers
       : 0;
   }
   out.totalGoalsSampled = totalGoalsAcrossPlayers;
