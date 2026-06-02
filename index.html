@@ -106,6 +106,20 @@
         <div id="groups" class="group-grid"></div>
       </section>
 
+      <section class="card wide reveal" id="schedule-card" hidden>
+        <h3 data-i18n="sectionSchedule">Schedule & per-match forecasts</h3>
+        <p class="muted small"><span data-i18n="scheduleHint">Click any match below to see who's likely to score, when, and who'll assist. KO matches show the most-likely matchup based on the MC's bracket projection.</span> <span class="muted">(<span id="schedule-count">104</span> <span data-i18n="scheduleMatchesLabel">matches</span>)</span></p>
+        <div class="schedule-filters">
+          <label class="gamma-pick"><span data-i18n="scheduleStageFilter">Stage</span>
+            <select id="schedule-stage"></select></label>
+          <label class="gamma-pick"><span data-i18n="scheduleGroupFilter">Group</span>
+            <select id="schedule-group"></select></label>
+          <label class="gamma-pick"><span data-i18n="scheduleDateFilter">Date</span>
+            <input id="schedule-date" type="date"></label>
+        </div>
+        <div id="schedule-list"></div>
+      </section>
+
       <section class="card wide reveal" id="players-card">
         <h3 data-i18n="sectionPlayers">Player Predictions</h3>
         <p class="muted small" data-i18n="playersHint"></p>

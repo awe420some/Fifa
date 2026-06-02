@@ -537,3 +537,40 @@ footer.foot {
   100% { background: transparent; }
 }
 .row-flash { animation: row-flash 1.2s ease-out 1; }
+
+/* ─────────── Per-match forecasts ─────────── */
+.group-matches { margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(127, 168, 150, 0.15); }
+.group-matches h5 { margin: 0 0 6px; }
+.match-row {
+  display: grid;
+  grid-template-columns: 95px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.match-row:hover { background: rgba(127, 168, 150, 0.08); }
+.match-row.expanded { background: rgba(0, 217, 126, 0.10); }
+.match-row .match-date { font-variant-numeric: tabular-nums; color: var(--muted); }
+.match-row .match-teams { font-weight: 500; }
+.match-row .match-lambdas { font-variant-numeric: tabular-nums; }
+.match-row .match-stage { padding: 0 6px; }
+.match-panel {
+  background: rgba(8, 20, 16, 0.6);
+  border: 1px solid rgba(0, 217, 126, 0.18);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 6px 0 10px;
+}
+.match-panel h4 { color: var(--accent-2, #00d97e); }
+.matchup-prob { margin: 0 0 10px; font-size: 0.82rem; }
+.schedule-filters { display: flex; gap: 12px; flex-wrap: wrap; margin: 10px 0; }
+.schedule-filters input[type="date"] { padding: 5px 8px; border-radius: 6px; border: 1px solid rgba(127, 168, 150, 0.3); background: var(--card, #0e1a16); color: var(--ink); font-size: 0.85rem; }
+#schedule-card .schedule-filters select { padding: 4px 8px; }
+/* Schedule section: 4-column match row (extra stage column) */
+#schedule-list .match-row {
+  grid-template-columns: 95px 130px 1fr auto;
+}
