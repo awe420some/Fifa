@@ -155,6 +155,11 @@ const state = {
   roomBets: [],             // [{ id, user_id, room_id, ... }] for active room
   roomChannel: null,        // realtime subscription handle
   authPending: false,
+  // Real-money pools (PR C)
+  pools: [],                // active pools in the current room
+  poolMembers: {},          // pool_id → [members]
+  paymentHandles: {},       // own handles row
+  roomHandles: {},          // user_id → handles row (for "pay to" links)
   // Bet simulator
   matchOdds: null,              // data/match-odds.json payload (per-match bookmaker quotes)
   betSlip: [],                  // [{matchNo, marketId, label, modelP, modelOdds, marketOdds, outcome}]
@@ -2185,8 +2190,10 @@ async function activateRoom(room) {
   state.activeRoom = room;
   try { localStorage.setItem("wc26_active_room", JSON.stringify(room)); } catch {}
   await loadRoomData();
+  await loadActivePools();
   subscribeRoomRealtime();
   renderFriends();
+  renderPools();
 }
 
 async function leaveActiveRoom() {
@@ -2230,6 +2237,12 @@ function subscribeRoomRealtime() {
     .on("postgres_changes",
       { event: "*", schema: "public", table: "room_members", filter: `room_id=eq.${roomId}` },
       () => loadRoomData().then(renderFriends))
+    .on("postgres_changes",
+      { event: "*", schema: "public", table: "pools", filter: `room_id=eq.${roomId}` },
+      () => loadActivePools().then(renderPools))
+    .on("postgres_changes",
+      { event: "*", schema: "public", table: "pool_members" },
+      () => loadActivePools().then(renderPools))
     .subscribe();
   state.roomChannel = ch;
 }
@@ -2429,6 +2442,317 @@ async function bootstrapMultiplayer() {
     }
   } catch {}
   renderFriends();
+  // Also kick off pools / handles loading and render the pools card.
+  await loadPaymentHandles();
+  await loadActivePools();
+  renderPools();
+}
+
+/* ─────────── Pools (real-money buy-ins, 3 game types) ─────────── */
+
+// Payment deep-link generators. The app doesn't touch money — it builds
+// a URL that opens the user's native payment app with the recipient and
+// amount pre-filled, then offers a "mark as paid" button after they're
+// back. Privacy-/legal-safe: we are a ledger, not a money transmitter.
+const PAYMENT_LINKS = {
+  venmo: (amount, handle) => `https://venmo.com/${encodeURIComponent(handle.replace(/^@/, ""))}?txn=pay&amount=${amount}&note=WC2026%20Pool`,
+  paypal: (amount, handle) => {
+    // accept "paypal.me/foo", "@foo", or "foo"
+    const h = handle.replace(/^@/, "").replace(/^https?:\/\/(www\.)?paypal\.me\//, "");
+    return `https://paypal.me/${encodeURIComponent(h)}/${amount}EUR`;
+  },
+  revolut: (amount, handle) => `https://revolut.me/${encodeURIComponent(handle.replace(/^@/, ""))}?amount=${amount}`,
+  sepa: (amount, iban) => `bitcoin:?label=WC2026%20Pool&amount=${amount}&iban=${encodeURIComponent(iban)}`,
+};
+
+async function loadPaymentHandles() {
+  if (!state.supabase || !state.supabaseUser) return;
+  const { data } = await state.supabase
+    .from("payment_handles").select().eq("user_id", state.supabaseUser.id).maybeSingle();
+  state.paymentHandles = data || {};
+}
+
+async function savePaymentHandles(handles) {
+  if (!state.supabase || !state.supabaseUser) return false;
+  const row = {
+    user_id: state.supabaseUser.id,
+    venmo: handles.venmo || null,
+    paypal: handles.paypal || null,
+    revolut: handles.revolut || null,
+    sepa_iban: handles.sepa_iban || null,
+    updated_at: new Date().toISOString(),
+  };
+  const { error } = await state.supabase.from("payment_handles").upsert(row);
+  if (!error) state.paymentHandles = row;
+  return !error;
+}
+
+async function loadActivePools() {
+  if (!state.supabase || !state.supabaseUser || !state.activeRoom) {
+    state.pools = []; state.poolMembers = {}; return;
+  }
+  const { data: pools } = await state.supabase
+    .from("pools").select().eq("room_id", state.activeRoom.id).order("created_at", { ascending: false });
+  state.pools = Array.isArray(pools) ? pools : [];
+  // Load all members for these pools in one query.
+  if (state.pools.length === 0) { state.poolMembers = {}; return; }
+  const ids = state.pools.map((p) => p.id);
+  const { data: members } = await state.supabase
+    .from("pool_members").select().in("pool_id", ids);
+  const byPool = {};
+  for (const m of (members || [])) (byPool[m.pool_id] ||= []).push(m);
+  state.poolMembers = byPool;
+  // Also load other members' payment handles (room mates).
+  const memberIds = (state.roomMembers || []).map((m) => m.user_id);
+  if (memberIds.length) {
+    const { data: handles } = await state.supabase
+      .from("payment_handles").select().in("user_id", memberIds);
+    state.roomHandles = (handles || []).reduce((acc, h) => { acc[h.user_id] = h; return acc; }, {});
+  }
+}
+
+async function createPool(args) {
+  if (!state.supabase || !state.supabaseUser || !state.activeRoom) return null;
+  const { name, type, buyIn, endsAt } = args;
+  if (!name || !type || !buyIn || !endsAt) return null;
+  const { data: pool, error } = await state.supabase.from("pools").insert({
+    room_id: state.activeRoom.id,
+    created_by: state.supabaseUser.id,
+    name, pool_type: type, buy_in: buyIn,
+    starts_at: new Date().toISOString(),
+    ends_at: new Date(endsAt).toISOString(),
+  }).select().single();
+  if (error || !pool) return null;
+  // Creator auto-joins.
+  await state.supabase.from("pool_members").insert({
+    pool_id: pool.id, user_id: state.supabaseUser.id,
+  });
+  return pool;
+}
+
+async function joinPool(poolId) {
+  if (!state.supabase || !state.supabaseUser) return false;
+  const { error } = await state.supabase.from("pool_members").upsert({
+    pool_id: poolId, user_id: state.supabaseUser.id,
+  }, { onConflict: "pool_id,user_id" });
+  return !error;
+}
+
+async function markBuyInPaid(poolId, paidVia, paidTo) {
+  if (!state.supabase || !state.supabaseUser) return false;
+  const { error } = await state.supabase.from("pool_members").update({
+    buy_in_status: "paid",
+    paid_at: new Date().toISOString(),
+    paid_via: paidVia || "other",
+    paid_to: paidTo || null,
+  }).match({ pool_id: poolId, user_id: state.supabaseUser.id });
+  if (!error) await loadActivePools();
+  return !error;
+}
+
+async function deletePool(poolId) {
+  if (!state.supabase || !state.supabaseUser) return false;
+  const { error } = await state.supabase.from("pools").delete().match({
+    id: poolId, created_by: state.supabaseUser.id,
+  });
+  if (!error) await loadActivePools();
+  return !error;
+}
+
+// Settle a pool: compute scores from local bet history (for P&L race),
+// pick the winner, update status. NOTE: for V1, settlement is creator-
+// initiated (button on the pool card after ends_at passes). Bracket and
+// CTP settlement uses pool_predictions which is hooked up but the
+// evaluation against finished matches is left as a manual "settle" for
+// V1 — automatic settlement of bracket/CTP needs match-result joining
+// (out-of-scope for this PR).
+async function settlePool(pool) {
+  if (!state.supabase || !state.supabaseUser) return false;
+  const members = state.poolMembers[pool.id] || [];
+  if (members.length === 0) return false;
+  let winnerId = null;
+  if (pool.pool_type === "pnl") {
+    // Score = each member's P&L from room-level bets in [starts_at, ends_at].
+    const within = state.roomBets.filter((b) =>
+      b.status !== "open"
+      && b.placed_at >= pool.starts_at
+      && b.placed_at <= pool.ends_at
+    );
+    const score = new Map();
+    for (const m of members) score.set(m.user_id, 0);
+    for (const b of within) {
+      if (!score.has(b.user_id)) continue;
+      score.set(b.user_id, score.get(b.user_id) + ((Number(b.payout) || 0) - Number(b.stake)));
+    }
+    // Persist scores per member.
+    for (const m of members) {
+      await state.supabase.from("pool_members").update({ score: score.get(m.user_id) || 0 })
+        .match({ pool_id: pool.id, user_id: m.user_id });
+    }
+    winnerId = [...score.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+  } else {
+    // For bracket / CTP: use existing pool_members.score, which the user
+    // updates manually (or a future cron computes from pool_predictions).
+    const sorted = members.slice().sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0));
+    winnerId = sorted[0]?.user_id || null;
+  }
+  await state.supabase.from("pools").update({
+    status: "settled",
+    winner_id: winnerId,
+  }).match({ id: pool.id });
+  await loadActivePools();
+  return true;
+}
+
+function renderPools() {
+  const dict = t();
+  const p = dict.pools || {};
+  const card = $("#pools-card");
+  if (!card) return;
+  // Pools card is gated on Supabase being configured + user being logged
+  // in + having an active room. Otherwise hide entirely.
+  if (!state.supabase || !state.supabaseUser || !state.activeRoom) {
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+  // Hydrate payment-handles inputs with stored values.
+  const ph = state.paymentHandles || {};
+  if ($("#ph-venmo")   && !$("#ph-venmo").dataset.hydrated)   { $("#ph-venmo").value   = ph.venmo   || ""; $("#ph-venmo").dataset.hydrated   = "1"; }
+  if ($("#ph-paypal")  && !$("#ph-paypal").dataset.hydrated)  { $("#ph-paypal").value  = ph.paypal  || ""; $("#ph-paypal").dataset.hydrated  = "1"; }
+  if ($("#ph-revolut") && !$("#ph-revolut").dataset.hydrated) { $("#ph-revolut").value = ph.revolut || ""; $("#ph-revolut").dataset.hydrated = "1"; }
+  if ($("#ph-sepa")    && !$("#ph-sepa").dataset.hydrated)    { $("#ph-sepa").value    = ph.sepa_iban || ""; $("#ph-sepa").dataset.hydrated    = "1"; }
+
+  // Render the pool list.
+  const listEl = $("#pools-list");
+  if (!listEl) return;
+  if (!state.pools?.length) {
+    listEl.innerHTML = `<h4>${escape(p.activePools || "Active pools")}</h4>
+      <p class="muted small">${escape(p.noPools || "No active pools.")}</p>`;
+    return;
+  }
+  const nickFor = (uid) => (state.roomMembers.find((m) => m.user_id === uid)?.nickname) || "—";
+  listEl.innerHTML = `<h4>${escape(p.activePools || "Active pools")}</h4>` +
+    state.pools.map((pool) => {
+      const members = state.poolMembers[pool.id] || [];
+      const me = members.find((m) => m.user_id === state.supabaseUser.id);
+      const inPool = !!me;
+      const statusLbl = pool.status === "open" ? (p.poolStatusOpen || "Open")
+                       : pool.status === "locked" ? (p.poolStatusLocked || "Locked")
+                       : (p.poolStatusSettled || "Settled");
+      const winnerLine = pool.winner_id
+        ? `<p>${escape(p.winner || "Winner")}: <b>${escape(nickFor(pool.winner_id))}</b> · €${Number(pool.pot_total).toFixed(2)}</p>` : "";
+      const typeLbl = pool.pool_type === "pnl" ? (p.typePnl || "P&L race")
+                     : pool.pool_type === "bracket" ? (p.typeBracket || "Bracket")
+                     : (p.typeCtp || "CTP");
+      const membersTable = `<table class="wallet-table">
+        <thead><tr>
+          <th>${escape(p.colNick || "Nick")}</th>
+          <th>${escape(p.colStatus || "Status")}</th>
+          <th>${escape(p.colScore || "Score")}</th>
+          <th>${escape(p.payTo || "Pay to")}</th>
+        </tr></thead><tbody>
+        ${members.map((m) => {
+          const nick = escape(nickFor(m.user_id));
+          const statusCls = m.buy_in_status === "paid" ? "edge-pos" : "muted";
+          const statusTxt = m.buy_in_status === "paid"
+            ? `${escape(p.buyInPaid || "Paid")}${m.paid_via ? " · " + m.paid_via : ""}`
+            : (p.buyInPending || "Pending");
+          // Payment links for OTHER members (we pay them, not ourselves).
+          const handles = state.roomHandles?.[m.user_id] || {};
+          const showPayLinks = m.user_id !== state.supabaseUser.id
+                              && me && me.buy_in_status !== "paid"
+                              && pool.status === "open";
+          const payLinks = showPayLinks ? [
+            handles.venmo && `<a class="pay-link" href="${PAYMENT_LINKS.venmo(pool.buy_in, handles.venmo)}" target="_blank" rel="noopener">Venmo</a>`,
+            handles.paypal && `<a class="pay-link" href="${PAYMENT_LINKS.paypal(pool.buy_in, handles.paypal)}" target="_blank" rel="noopener">PayPal</a>`,
+            handles.revolut && `<a class="pay-link" href="${PAYMENT_LINKS.revolut(pool.buy_in, handles.revolut)}" target="_blank" rel="noopener">Revolut</a>`,
+            handles.sepa_iban && `<button class="pay-link" data-copy-iban="${escape(handles.sepa_iban)}" type="button">IBAN</button>`,
+          ].filter(Boolean).join(" · ") : "—";
+          return `<tr>
+            <td><b>${nick}</b></td>
+            <td class="${statusCls}">${statusTxt}</td>
+            <td>${Number(m.score || 0).toFixed(2)}</td>
+            <td class="small">${payLinks}</td>
+          </tr>`;
+        }).join("")}
+      </tbody></table>`;
+      const meActions = inPool && me.buy_in_status !== "paid" && pool.status === "open"
+        ? `<button class="copy-btn" data-pool-mark-paid="${pool.id}" type="button">${escape(p.markPaid || "Mark as paid")}</button>`
+        : "";
+      const settleBtn = (pool.created_by === state.supabaseUser.id && pool.status !== "settled")
+        ? `<button class="copy-btn" data-pool-settle="${pool.id}" type="button">${escape(p.settleNow || "Settle now")}</button>`
+        : "";
+      const deleteBtn = (pool.created_by === state.supabaseUser.id)
+        ? `<button class="copy-btn" data-pool-delete="${pool.id}" type="button">${escape(p.delete || "Delete")}</button>`
+        : "";
+      const joinBtn = !inPool
+        ? `<button class="primary" data-pool-join="${pool.id}" type="button">Join</button>`
+        : "";
+      return `<div class="pool-card">
+        <header>
+          <h4>${escape(pool.name)} <span class="muted small">· ${escape(typeLbl)}</span></h4>
+          <span class="pool-status pool-status-${pool.status}">${escape(statusLbl)}</span>
+        </header>
+        <p class="muted small">${escape(p.buyIn || "Buy-in")}: <b>€${Number(pool.buy_in).toFixed(2)}</b> · ${escape(p.potTotal || "Pot")}: <b>€${Number(pool.pot_total).toFixed(2)}</b> · ${escape(p.endsAt || "Ends")}: ${new Date(pool.ends_at).toISOString().slice(0, 10)}</p>
+        ${winnerLine}
+        ${membersTable}
+        <div class="pool-actions">${joinBtn} ${meActions} ${settleBtn} ${deleteBtn}</div>
+      </div>`;
+    }).join("");
+}
+
+function wirePools() {
+  const card = $("#pools-card");
+  if (!card || card.dataset.wired) return;
+  card.dataset.wired = "1";
+
+  $("#ph-save")?.addEventListener("click", async () => {
+    const handles = {
+      venmo: $("#ph-venmo")?.value?.trim() || "",
+      paypal: $("#ph-paypal")?.value?.trim() || "",
+      revolut: $("#ph-revolut")?.value?.trim() || "",
+      sepa_iban: $("#ph-sepa")?.value?.trim() || "",
+    };
+    const ok = await savePaymentHandles(handles);
+    const status = $("#ph-status");
+    if (status) status.textContent = ok ? (t().pools?.handlesSaved || "Saved.") : "Error.";
+    renderPools();
+  });
+
+  $("#pool-create-btn")?.addEventListener("click", async () => {
+    const name = $("#pool-name")?.value?.trim();
+    const type = $("#pool-type")?.value;
+    const buyIn = Number($("#pool-buyin")?.value);
+    const endsAt = $("#pool-ends")?.value;
+    if (!name || !type || !buyIn || !endsAt) return;
+    const pool = await createPool({ name, type, buyIn, endsAt });
+    if (pool) {
+      $("#pool-name").value = "";
+      await loadActivePools();
+      renderPools();
+    }
+  });
+
+  card.addEventListener("click", async (e) => {
+    const joinBtn = e.target.closest("[data-pool-join]");
+    if (joinBtn) { await joinPool(joinBtn.dataset.poolJoin); await loadActivePools(); renderPools(); return; }
+    const markBtn = e.target.closest("[data-pool-mark-paid]");
+    if (markBtn) { await markBuyInPaid(markBtn.dataset.poolMarkPaid); renderPools(); return; }
+    const settleBtn = e.target.closest("[data-pool-settle]");
+    if (settleBtn) {
+      const pool = state.pools.find((p) => p.id === settleBtn.dataset.poolSettle);
+      if (pool && confirm("Settle this pool now?")) { await settlePool(pool); renderPools(); }
+      return;
+    }
+    const delBtn = e.target.closest("[data-pool-delete]");
+    if (delBtn) {
+      if (confirm(t().pools?.confirmDelete || "Delete?")) { await deletePool(delBtn.dataset.poolDelete); renderPools(); }
+      return;
+    }
+    const iban = e.target.closest("[data-copy-iban]");
+    if (iban) { try { await navigator.clipboard.writeText(iban.dataset.copyIban); } catch {} return; }
+  });
 }
 
 /* ─────────── Explainer panels (shared by all aggregate surfaces) ─────────── */
@@ -3377,6 +3701,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     wireRefreshButton();
     wireBetSlip();
     wireFriends();
+    wirePools();
     wireTabs();
     switchTab(state.activeTab);
     // Multiplayer is opt-in via /api/config.js; the call no-ops if the

@@ -788,3 +788,45 @@ table tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.02); }
 .friends-row button.primary:hover { filter: brightness(1.05); }
 .friends-handle b { color: var(--accent); }
 #friends-leaderboard table { margin-top: var(--s-3); }
+
+/* ─────────── Pools (PR C) ─────────── */
+
+.pool-card {
+  background: rgba(127, 168, 150, 0.04);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: var(--s-4);
+  margin: var(--s-3) 0;
+}
+.pool-card header {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: var(--s-2);
+}
+.pool-card header h4 { margin: 0; }
+.pool-status {
+  padding: var(--s-1) var(--s-3); border-radius: var(--r-pill);
+  font-size: 0.72rem; font-weight: 700; letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.pool-status-open    { background: rgba(0, 217, 126, 0.15); color: var(--accent); }
+.pool-status-locked  { background: rgba(255, 209, 102, 0.15); color: var(--accent-2); }
+.pool-status-settled { background: rgba(127, 168, 150, 0.15); color: var(--muted); }
+
+.pool-actions {
+  margin-top: var(--s-3);
+  display: flex; gap: var(--s-2); flex-wrap: wrap;
+}
+
+.pay-link {
+  display: inline-block;
+  padding: var(--s-1) var(--s-2);
+  background: rgba(0, 217, 126, 0.10);
+  border: 1px solid rgba(0, 217, 126, 0.30);
+  border-radius: var(--r-sm);
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 0.82rem; font-weight: 600;
+  cursor: pointer;
+  transition: background var(--t-fast);
+}
+.pay-link:hover { background: rgba(0, 217, 126, 0.20); }
