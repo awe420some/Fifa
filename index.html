@@ -34,6 +34,25 @@
 <body>
   <canvas id="confetti" aria-hidden="true"></canvas>
 
+  <aside id="bet-slip" class="bet-slip" hidden>
+    <header>
+      <h4><span data-i18n="bets.slipTitle">Bet Slip</span> <span class="slip-count" id="bet-slip-count">0</span></h4>
+      <button id="bet-slip-toggle" type="button" title="Toggle">−</button>
+    </header>
+    <div id="bet-slip-items"></div>
+    <div class="bet-slip-summary">
+      <label><span data-i18n="bets.stake">Einsatz</span>
+        <span class="stake-input"><span class="cur">€</span><input id="bet-stake" type="number" min="1" value="10" step="1"></span>
+      </label>
+      <div class="slip-row"><span data-i18n="bets.comboOdds">Kombi-Quote</span><b id="bet-combo-odds">—</b></div>
+      <div class="slip-row"><span data-i18n="bets.potReturn">Möglicher Return</span><b id="bet-return">—</b></div>
+      <div class="slip-row"><span data-i18n="bets.modelEdge">Modell-Edge</span><b id="bet-edge">—</b></div>
+      <p class="muted small" data-i18n="bets.simNote">Simuliert · kein echtes Geld</p>
+      <button id="bet-place" class="primary" type="button" data-i18n="bets.place">Wette platzieren</button>
+      <button id="bet-clear" type="button" data-i18n="bets.clear">Leeren</button>
+    </div>
+  </aside>
+
   <div class="container">
     <header class="hero">
       <div class="hero-tools">
@@ -176,6 +195,20 @@
         <h3 data-i18n="sectionHistory">Title-Probability Over Time</h3>
         <div id="title-history"></div>
         <p class="muted small" data-i18n="historyHint">Updated weekly by the scrape-odds GitHub Action.</p>
+      </section>
+
+      <section class="card wide reveal" id="wallet-card">
+        <h3 data-i18n="wallet.section">Mein Wettverlauf</h3>
+        <p class="muted small" data-i18n="wallet.intro">Klicke in einem Match-Panel auf eine Quote, um sie zum Slip rechts hinzuzufügen. Wetten werden lokal gespeichert und beim Match-Ende automatisch abgerechnet. Ausschließlich simuliert — kein echtes Geld.</p>
+        <div class="wallet-stats">
+          <div><span data-i18n="wallet.pl">Lifetime P&amp;L</span><b id="wallet-pl">€0.00</b></div>
+          <div><span data-i18n="wallet.count">Wetten</span><b id="wallet-count">0</b></div>
+          <div><span data-i18n="wallet.hitrate">Trefferquote</span><b id="wallet-hitrate">—</b></div>
+          <div><span data-i18n="wallet.avgEdge">Ø Edge vs Markt</span><b id="wallet-edge">—</b></div>
+        </div>
+        <h4 data-i18n="wallet.openHeader">Offen</h4><div id="wallet-open"></div>
+        <h4 data-i18n="wallet.historyHeader">Abgeschlossen (letzte 50)</h4><div id="wallet-history"></div>
+        <button id="wallet-reset" class="copy-btn" type="button" data-i18n="wallet.reset">P&amp;L zurücksetzen</button>
       </section>
 
       <section class="card wide reveal">
