@@ -1,6 +1,8 @@
 {
-  "writtenAt": "2026-06-02T15:23:46.540Z",
-  "market": null,
-  "playerProps": "2026-05-28T13:46:05.621Z",
-  "titleHistory": "2026-06-02T14:01:38.472Z"
+  "writtenAt": "2026-06-03T10:24:26.893Z",
+  "actionRunId": "26878656925",
+  "commit": "da3c6b80a4cfe4d7fc6bf6d7ffb0ac081fb529b6",
+  "market": "2026-06-03T10:23:19.795Z",
+  "playerProps": "2026-06-03T10:22:52.481Z",
+  "titleHistory": "2026-06-03T10:24:26.842Z"
 }
