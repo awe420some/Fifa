@@ -8,6 +8,12 @@
       ]
     },
     {
+      "source": "/data/match-odds.json",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=60, stale-while-revalidate=300" }
+      ]
+    },
+    {
       "source": "/service-worker.js",
       "headers": [
         { "key": "Cache-Control", "value": "no-cache" }

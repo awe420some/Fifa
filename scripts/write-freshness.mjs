@@ -11,6 +11,7 @@ const cwd = process.cwd();
 const tracked = {
   market: "data/market-snapshot.json",
   playerProps: "data/player-props-2026.json",
+  matchOdds: "data/match-odds.json",
   titleHistory: "data/title-history.json",
 };
 

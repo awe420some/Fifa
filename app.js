@@ -19,6 +19,7 @@ import { buildCovariateProvider } from "./predictor.js";
 import { PLAYERS_2026, BIG5_LEAGUES } from "./data/players-2026.js";
 import { GOAL_MINUTE_BINS, DEFAULT_MIN_SHARE, LEAGUE_STRENGTH, teamScoringShares } from "./models/players.js";
 import { buildAllMatchForecasts } from "./models/matchForecast.js";
+import { deriveMarkets, settleMarket } from "./models/markets.js";
 
 async function loadMarketSnapshot() {
   try {
@@ -66,6 +67,16 @@ async function loadPlayerProps() {
 async function loadFreshness() {
   try {
     const resp = await fetch("./data/freshness.json", { cache: "no-store" });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+async function loadMatchOdds() {
+  try {
+    const resp = await fetch("./data/match-odds.json", { cache: "no-store" });
     if (!resp.ok) return null;
     return await resp.json();
   } catch {
@@ -134,6 +145,12 @@ const state = {
   liveOverride: false,          // force live-polling regardless of schedule window
   liveError: null,              // last /api/live fetch error message (null on success)
   liveScheduleMap: null,        // Map<providerMatchNo → internalMatchNo (1-104)>
+  // Bet simulator
+  matchOdds: null,              // data/match-odds.json payload (per-match bookmaker quotes)
+  betSlip: [],                  // [{matchNo, marketId, label, modelP, modelOdds, marketOdds, outcome}]
+  betHistory: [],               // placed bets — see settleFinishedBets()
+  betStake: 10,
+  betSlipCollapsed: false,
   // Single-open explainer slots — one per surface
   expandedTeam: null,
   expandedStage: null,
@@ -862,6 +879,16 @@ function setupScenarios() {
   const dash = $("#dashboard");
   if (dash) {
     dash.addEventListener("click", (e) => {
+      // (0) Click-to-bet — fires BEFORE the form-control early-return so
+      // the <button.bet-cell> can be picked up via delegation.
+      const betCell = e.target.closest(".bet-cell[data-bet]");
+      if (betCell) {
+        toggleBetSelection(betCell.dataset.bet);
+        renderBetSlip();
+        // Re-render the open match panel so the .selected class updates.
+        if (state.expandedMatch != null) { renderGroups(); renderScheduleSection(); }
+        return;
+      }
       // Skip clicks on form controls inside any handled surface.
       if (e.target.closest("input,button,select,a,textarea")) {
         // Allow pin checkboxes & refresh button to handle themselves.
@@ -1108,6 +1135,8 @@ function renderMatchPanel(matchNo) {
       </div>
       <p class="muted small">${escape(ex.minuteLegend || "Cell value = expected goals in bin")}</p>
     </div>`;
+  // Betting markets block (click-to-bet, sends selections to the sticky slip)
+  const betsBlock = renderBetsBlock(matchNo, primary);
   // Alternatives
   const altsBlock = alts.length === 0 ? "" : `
     <div class="detail-block" style="grid-column: 1 / -1">
@@ -1127,7 +1156,78 @@ function renderMatchPanel(matchNo) {
       ${assistBlock}
       ${minuteBlock}
       ${altsBlock}
+      ${betsBlock}
     </div>`;
+}
+
+// Returns the HTML for the "Wetten" block inside a match-panel: model
+// fair-odds + (when available) aggregated bookmaker odds + edge %, grouped
+// into Hauptmärkte / Spezialmärkte / Spieler. Each odds cell is a button
+// the delegated #dashboard click handler picks up via [data-bet].
+function renderBetsBlock(matchNo, primary) {
+  const dict = t();
+  const bets = dict.bets || {};
+  const rho = state.dcParams?.rho || 0;
+  const markets = deriveMarkets(primary, rho);
+  if (!Object.keys(markets).length) return "";
+  // Look up bookmaker quotes by internal matchNo. The scraper joins by
+  // (kickoffUTC + team-pair) so this just hits matchNo as the key.
+  const bookie = state.matchOdds?.matches?.[matchNo] || null;
+  const bookieOddsFor = (marketId) => {
+    if (!bookie) return null;
+    const map = {
+      "wld.home": bookie.home, "wld.draw": bookie.draw, "wld.away": bookie.away,
+      "totals.over_2.5": bookie.over25, "totals.under_2.5": bookie.under25,
+      "btts.yes": bookie.btts_yes, "btts.no": bookie.btts_no,
+    };
+    const p = map[marketId];
+    return Number.isFinite(p) && p > 0.01 && p < 0.99 ? 1 / p : null;
+  };
+  const slipIds = new Set(state.betSlip.map((s) => `${s.matchNo}|${s.marketId}`));
+  const renderRow = (id, mk) => {
+    if (!mk.fairOdds) return "";
+    const sel = slipIds.has(`${matchNo}|${id}`) ? " selected" : "";
+    const modelOdds = mk.fairOdds;
+    const marketOdds = bookieOddsFor(id);
+    const edge = marketOdds ? ((modelOdds / marketOdds) - 1) : null;
+    const edgeCell = edge == null
+      ? `<span class="muted small">—</span>`
+      : `<span class="bet-edge ${edge < 0 ? "edge-pos" : "edge-neg"}">${edge < 0 ? "+" : ""}${(-edge * 100).toFixed(1)}%</span>`;
+    const marketCell = marketOdds ? marketOdds.toFixed(2) : `<span class="muted">—</span>`;
+    return `<tr>
+      <td>${escape(mk.label)}</td>
+      <td><button class="bet-cell${sel}" data-bet="${matchNo}|${id}" type="button">${modelOdds.toFixed(2)}</button></td>
+      <td>${marketCell}</td>
+      <td>${edgeCell}</td>
+    </tr>`;
+  };
+  const ids = Object.keys(markets);
+  const idsInGroup = (g) => ids.filter((id) => markets[id].group === g);
+  const headerCells = `<thead><tr>
+    <th>${escape(bets.market || "Markt")}</th>
+    <th>${escape(bets.modelOdds || "Modell")}</th>
+    <th>${escape(bets.marketOdds || "Markt")}</th>
+    <th>${escape(bets.edge || "Edge")}</th>
+  </tr></thead>`;
+  const mainRows  = idsInGroup("main").map((id) => renderRow(id, markets[id])).join("");
+  const specialsRows = idsInGroup("specials").map((id) => renderRow(id, markets[id])).join("");
+  const scorerRows = idsInGroup("scorers").map((id) => renderRow(id, markets[id])).join("");
+  const hint = bookie
+    ? escape(bets.bookieHint || "Modell vs aggregierte Bookmaker-Quote — Edge = Modell-Quote ÷ Markt-Quote − 1 (positiv = Wert).")
+    : escape(bets.modelOnlyHint || "Nur Modell-Quoten — Bookmaker-Vergleich erscheint sobald data/match-odds.json gefüllt ist.");
+  return `<div class="detail-block bets-block" style="grid-column: 1 / -1">
+    <h5>${escape(bets.title || "Wetten (simuliert)")}</h5>
+    <p class="muted small">${hint}</p>
+    <details open><summary>${escape(bets.main || "Hauptmärkte")}</summary>
+      <table class="bets-table">${headerCells}<tbody>${mainRows}</tbody></table>
+    </details>
+    <details><summary>${escape(bets.specials || "Spezialmärkte (BTTS, Correct Score, HT/FT, Handicap)")}</summary>
+      <table class="bets-table">${headerCells}<tbody>${specialsRows}</tbody></table>
+    </details>
+    ${scorerRows ? `<details><summary>${escape(bets.scorers || "Anytime-Scorer")}</summary>
+      <table class="bets-table">${headerCells}<tbody>${scorerRows}</tbody></table>
+    </details>` : ""}
+  </div>`;
 }
 
 const STAGE_ORDER = ["group", "R32", "R16", "QF", "SF", "third", "final"];
@@ -1317,6 +1417,16 @@ async function bootstrap() {
   // Restore manual live-override from localStorage so polling can start
   // immediately on reload without waiting for the user to flip the toggle.
   try { state.liveOverride = localStorage.getItem("wc26_live_override") === "1"; } catch {}
+  // Restore bet-simulator state from localStorage (slip + history + stake).
+  try {
+    const slip = JSON.parse(localStorage.getItem("wc26_betslip_v1") || "[]");
+    if (Array.isArray(slip)) state.betSlip = slip;
+    const hist = JSON.parse(localStorage.getItem("wc26_bet_history_v1") || "[]");
+    if (Array.isArray(hist)) state.betHistory = hist;
+    const stake = Number(localStorage.getItem("wc26_bet_stake") || "10");
+    if (Number.isFinite(stake) && stake > 0) state.betStake = stake;
+    state.betSlipCollapsed = localStorage.getItem("wc26_betslip_collapsed") === "1";
+  } catch {}
   const combined = buildCombinedTournaments();
   state.marketSnapshot = await loadMarketSnapshot();
   const rawMarket = state.marketSnapshot?.aggregated || MARKET_ODDS_2026;
@@ -1329,6 +1439,7 @@ async function bootstrap() {
   // Live data is best-effort and may 404 on platforms without the function.
   state.live = await loadLive().catch(() => null);
   state.liveScheduleMap = buildLiveScheduleMap();
+  state.matchOdds = await loadMatchOdds();
   // 1. Fit DC on ALL historical matches (group + KO across all years).
   state.dcParams = fitDCOnHistorical(HISTORICAL_KNOCKOUTS, HISTORICAL_ELO, NEW_HISTORICAL_MATCHES);
   // 2. Squad-strength deltas.
@@ -1360,6 +1471,8 @@ function renderAll() {
   renderHistoryFanChart();
   renderContext();
   renderMethodology();
+  renderWallet();
+  renderBetSlip();
   fireConfetti();
 }
 
@@ -1504,12 +1617,13 @@ function wireRefreshButton() {
     persistPrev(cloneCurrentSnapshot());
     state.prev = restorePrev();
     // Re-fetch all volatile data in parallel.
-    const [market, history, props, freshness, live] = await Promise.all([
+    const [market, history, props, freshness, live, matchOdds] = await Promise.all([
       loadMarketSnapshot(),
       loadTitleHistory(),
       loadPlayerProps(),
       loadFreshness(),
       loadLive().catch(() => null),
+      loadMatchOdds(),
     ]);
     if (market) {
       state.marketSnapshot = market;
@@ -1520,6 +1634,7 @@ function wireRefreshButton() {
     if (props) state.playerProps = props;
     if (freshness) state.freshness = freshness;
     if (live) state.live = live;
+    if (matchOdds) state.matchOdds = matchOdds;
     recompute();
     state.diff = diffSnapshots(state.prev, cloneCurrentSnapshot());
     state.refreshing = false;
@@ -1631,7 +1746,282 @@ async function pollLive() {
   } catch (e) {
     if (e?.name !== "AbortError") state.liveError = String(e?.message || e);
   }
+  settleFinishedBets();
   renderFreshnessBanner();
+}
+
+/* ─────────── Bet simulator ─────────── */
+
+function persistBetState() {
+  try {
+    localStorage.setItem("wc26_betslip_v1", JSON.stringify(state.betSlip));
+    localStorage.setItem("wc26_bet_history_v1", JSON.stringify(state.betHistory));
+    localStorage.setItem("wc26_bet_stake", String(state.betStake));
+    localStorage.setItem("wc26_betslip_collapsed", state.betSlipCollapsed ? "1" : "0");
+  } catch { /* quota */ }
+}
+
+// Toggle a selection in the slip. dataset.bet = "matchNo|marketId".
+function toggleBetSelection(payload) {
+  const [matchNoStr, marketId] = String(payload || "").split("|");
+  const matchNo = Number(matchNoStr);
+  if (!Number.isFinite(matchNo) || !marketId) return;
+  const fc = state.matchForecasts?.get(matchNo);
+  if (!fc?.matchups?.[0]) return;
+  const primary = fc.matchups[0];
+  const rho = state.dcParams?.rho || 0;
+  const markets = deriveMarkets(primary, rho);
+  const mk = markets[marketId];
+  if (!mk || !mk.fairOdds) return;
+  // Remove any existing selection for the same matchNo (one bet per match
+  // in the slip — no contradictory selections like "Home Win + Draw").
+  const idx = state.betSlip.findIndex((s) => s.matchNo === matchNo && s.marketId === marketId);
+  if (idx >= 0) {
+    state.betSlip.splice(idx, 1);
+  } else {
+    // Drop any prior selection on the same match before adding the new one.
+    state.betSlip = state.betSlip.filter((s) => s.matchNo !== matchNo);
+    const bookie = state.matchOdds?.matches?.[matchNo] || null;
+    const bookieMap = bookie ? {
+      "wld.home": bookie.home, "wld.draw": bookie.draw, "wld.away": bookie.away,
+      "totals.over_2.5": bookie.over25, "totals.under_2.5": bookie.under25,
+      "btts.yes": bookie.btts_yes, "btts.no": bookie.btts_no,
+    } : {};
+    const marketP = bookieMap[marketId];
+    state.betSlip.push({
+      matchNo, marketId,
+      label: mk.label,
+      teamA: primary.teamA, teamB: primary.teamB,
+      modelP: mk.p,
+      modelOdds: mk.fairOdds,
+      marketOdds: (Number.isFinite(marketP) && marketP > 0.01 && marketP < 0.99) ? 1 / marketP : null,
+      outcome: mk.outcome,
+    });
+  }
+  persistBetState();
+}
+
+function renderBetSlip() {
+  const dict = t();
+  const bets = dict.bets || {};
+  const aside = $("#bet-slip");
+  if (!aside) return;
+  const items = state.betSlip;
+  if (!items.length) {
+    aside.hidden = true;
+    return;
+  }
+  aside.hidden = false;
+  aside.classList.toggle("collapsed", !!state.betSlipCollapsed);
+  $("#bet-slip-count").textContent = String(items.length);
+  $("#bet-slip-toggle").textContent = state.betSlipCollapsed ? "+" : "−";
+  $("#bet-slip-items").innerHTML = items.map((s) => `
+    <div class="slip-item">
+      <div class="slip-line"><b>${escape(s.teamA)} – ${escape(s.teamB)}</b>
+        <button class="slip-remove" data-bet="${s.matchNo}|${s.marketId}" type="button" title="${escape(bets.remove || "Entfernen")}">×</button></div>
+      <div class="slip-line muted small">${escape(s.label)}</div>
+      <div class="slip-line"><span>${escape(bets.modelOdds || "Modell")}: <b>${s.modelOdds.toFixed(2)}</b></span>
+        ${s.marketOdds ? `<span class="muted">${escape(bets.marketOdds || "Markt")}: ${s.marketOdds.toFixed(2)}</span>` : ""}</div>
+    </div>`).join("");
+  // Combo math
+  const comboModel = items.reduce((p, s) => p * s.modelOdds, 1);
+  const haveAllMarket = items.every((s) => s.marketOdds);
+  const comboMarket = haveAllMarket ? items.reduce((p, s) => p * s.marketOdds, 1) : null;
+  const stake = state.betStake || 1;
+  $("#bet-combo-odds").textContent = comboModel.toFixed(2);
+  $("#bet-return").textContent = `€${(stake * comboModel).toFixed(2)}`;
+  $("#bet-edge").textContent = comboMarket ? `${((comboModel / comboMarket - 1) * 100).toFixed(1)}%` : "—";
+  $("#bet-edge").className = comboMarket
+    ? (comboModel > comboMarket ? "edge-pos" : "edge-neg")
+    : "";
+}
+
+function placeBet() {
+  const items = state.betSlip;
+  if (!items.length) return;
+  const stake = state.betStake || 1;
+  const comboOdds = items.reduce((p, s) => p * s.modelOdds, 1);
+  const comboMarketOdds = items.every((s) => s.marketOdds)
+    ? items.reduce((p, s) => p * s.marketOdds, 1)
+    : null;
+  const bet = {
+    id: `bet_${Date.now()}_${Math.floor(Math.random() * 1e6)}`,
+    placedAt: new Date().toISOString(),
+    stake,
+    comboOdds,
+    comboMarketOdds,
+    items: items.map((s) => ({ ...s })),
+    status: "open",      // open | won | lost | void
+    payout: null,
+    settledAt: null,
+  };
+  state.betHistory.unshift(bet);
+  state.betSlip = [];
+  persistBetState();
+  renderBetSlip();
+  renderWallet();
+  // Re-render any open match panels so the now-deselected cells lose .selected.
+  if (state.expandedMatch != null) renderGroups();
+  renderScheduleSection();
+}
+
+function clearSlip() {
+  state.betSlip = [];
+  persistBetState();
+  renderBetSlip();
+  if (state.expandedMatch != null) renderGroups();
+  renderScheduleSection();
+}
+
+// Auto-settle bets whose matches have finished. Called from pollLive().
+function settleFinishedBets() {
+  let changed = false;
+  for (const bet of state.betHistory) {
+    if (bet.status !== "open") continue;
+    const verdicts = [];
+    let undetermined = false;
+    for (const item of bet.items) {
+      const live = getLiveForSchedule(item.matchNo);
+      if (!live || live.status !== "finished" || live.scoreA == null || live.scoreB == null) {
+        undetermined = true;
+        verdicts.push(null);
+        continue;
+      }
+      const v = settleMarket(item, {
+        scoreA: live.scoreA, scoreB: live.scoreB,
+        htScoreA: live.htScoreA, htScoreB: live.htScoreB,
+        goalScorers: live.goalScorers,
+      });
+      verdicts.push(v);
+    }
+    if (undetermined) continue;       // wait for all legs to settle
+    // A null verdict (e.g. DNB on a drawn match) voids that leg but the
+    // remaining legs still settle; combo combos drop the voided leg from
+    // the odds product. If ALL legs are null, the whole bet is void.
+    const liveLegs = verdicts.filter((v) => v !== null);
+    if (liveLegs.length === 0) {
+      bet.status = "void";
+      bet.payout = bet.stake;
+    } else if (liveLegs.every((v) => v === true)) {
+      // Recompute combo from non-void legs.
+      const liveOdds = bet.items.reduce((acc, item, i) => verdicts[i] === null ? acc : acc * item.modelOdds, 1);
+      bet.status = "won";
+      bet.payout = bet.stake * liveOdds;
+    } else {
+      bet.status = "lost";
+      bet.payout = 0;
+    }
+    bet.settledAt = new Date().toISOString();
+    changed = true;
+  }
+  if (changed) {
+    persistBetState();
+    renderWallet();
+  }
+}
+
+function fmtPL(n) {
+  const s = n >= 0 ? "+" : "−";
+  return `${s}€${Math.abs(n).toFixed(2)}`;
+}
+
+function renderWallet() {
+  const dict = t();
+  const w = dict.wallet || {};
+  const root = $("#wallet-card");
+  if (!root) return;
+  const hist = state.betHistory;
+  const settled = hist.filter((b) => b.status !== "open");
+  const open = hist.filter((b) => b.status === "open");
+  let pl = 0, wins = 0, losses = 0;
+  let edgeSum = 0, edgeCount = 0;
+  for (const b of settled) {
+    pl += (b.payout || 0) - b.stake;
+    if (b.status === "won") wins++;
+    if (b.status === "lost") losses++;
+    if (b.comboMarketOdds && b.comboOdds) {
+      edgeSum += (b.comboOdds / b.comboMarketOdds) - 1;
+      edgeCount++;
+    }
+  }
+  const decided = wins + losses;
+  const plEl = $("#wallet-pl");
+  if (plEl) {
+    plEl.textContent = fmtPL(pl);
+    plEl.classList.toggle("edge-pos", pl > 0);
+    plEl.classList.toggle("edge-neg", pl < 0);
+  }
+  if ($("#wallet-count")) $("#wallet-count").textContent = String(hist.length);
+  if ($("#wallet-hitrate")) $("#wallet-hitrate").textContent = decided ? `${((wins / decided) * 100).toFixed(0)}%` : "—";
+  if ($("#wallet-edge")) $("#wallet-edge").textContent = edgeCount ? `${((edgeSum / edgeCount) * 100).toFixed(1)}%` : "—";
+  const renderRows = (list, isHistory) => {
+    if (!list.length) return `<p class="muted small">${escape(w.empty || "Noch keine Wetten.")}</p>`;
+    return `<table class="wallet-table">
+      <thead><tr>
+        <th>${escape(w.colPlaced || "Platziert")}</th>
+        <th>${escape(w.colItems || "Auswahl")}</th>
+        <th>${escape(w.colStake || "Einsatz")}</th>
+        <th>${escape(w.colOdds || "Kombi-Quote")}</th>
+        <th>${escape(w.colStatus || "Status")}</th>
+        ${isHistory ? `<th>${escape(w.colPL || "P&L")}</th>` : ""}
+      </tr></thead>
+      <tbody>
+      ${list.slice(0, 50).map((b) => {
+        const items = b.items.map((it) => `${it.teamA}–${it.teamB} · ${it.label}`).join("<br>");
+        const statusCls = b.status === "won" ? "edge-pos" : b.status === "lost" ? "edge-neg" : "muted";
+        const statusLbl = b.status === "open" ? (w.open || "Offen")
+                         : b.status === "won" ? (w.won || "Gewonnen")
+                         : b.status === "lost" ? (w.lost || "Verloren")
+                         : (w.void || "Storniert");
+        const plCell = isHistory ? `<td class="${b.payout > b.stake ? "edge-pos" : b.payout < b.stake ? "edge-neg" : "muted"}">${fmtPL((b.payout || 0) - b.stake)}</td>` : "";
+        return `<tr>
+          <td class="muted small">${b.placedAt.slice(0, 16).replace("T", " ")}</td>
+          <td class="small">${items}</td>
+          <td>€${b.stake.toFixed(2)}</td>
+          <td>${b.comboOdds.toFixed(2)}</td>
+          <td class="${statusCls}">${escape(statusLbl)}</td>
+          ${plCell}
+        </tr>`;
+      }).join("")}
+      </tbody></table>`;
+  };
+  if ($("#wallet-open")) $("#wallet-open").innerHTML = renderRows(open, false);
+  if ($("#wallet-history")) $("#wallet-history").innerHTML = renderRows(settled, true);
+}
+
+function wireBetSlip() {
+  const slipEl = $("#bet-slip");
+  if (!slipEl || slipEl.dataset.wired) return;
+  slipEl.dataset.wired = "1";
+  // Toggle (collapse / expand)
+  $("#bet-slip-toggle")?.addEventListener("click", () => {
+    state.betSlipCollapsed = !state.betSlipCollapsed;
+    persistBetState();
+    renderBetSlip();
+  });
+  // Remove single item (via × button inside slip)
+  slipEl.addEventListener("click", (e) => {
+    const rm = e.target.closest(".slip-remove[data-bet]");
+    if (rm) { toggleBetSelection(rm.dataset.bet); renderBetSlip();
+      if (state.expandedMatch != null) renderGroups();
+      renderScheduleSection();
+      return; }
+  });
+  // Stake input
+  $("#bet-stake")?.addEventListener("input", (e) => {
+    const v = Number(e.target.value);
+    state.betStake = Number.isFinite(v) && v > 0 ? v : 1;
+    persistBetState();
+    renderBetSlip();
+  });
+  $("#bet-place")?.addEventListener("click", placeBet);
+  $("#bet-clear")?.addEventListener("click", clearSlip);
+  $("#wallet-reset")?.addEventListener("click", () => {
+    if (!confirm(t().wallet?.confirmReset || "P&L wirklich zurücksetzen? Alle Wetten werden gelöscht.")) return;
+    state.betHistory = [];
+    persistBetState();
+    renderWallet();
+  });
 }
 
 /* ─────────── Explainer panels (shared by all aggregate surfaces) ─────────── */
@@ -2578,6 +2968,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     $("#dashboard").hidden = false;
     renderAll();
     wireRefreshButton();
+    wireBetSlip();
     startLivePollingIfActive();
     // Persist the current snapshot so the NEXT visit can diff against it.
     persistPrev(cloneCurrentSnapshot());

@@ -2,7 +2,7 @@ name: Scrape bookmaker odds
 
 on:
   schedule:
-    - cron: "*/30 * * * *"   # every 30 minutes — pre-tournament cadence
+    - cron: "0 * * * *"      # hourly — keeps The Odds API free tier (500/mo) safe
   workflow_dispatch:           # also runnable manually from the Actions tab
 
 permissions:
@@ -38,6 +38,13 @@ jobs:
         run: node scripts/scrape-player-props.mjs
         continue-on-error: true
 
+      - name: Run per-match odds scraper (The Odds API)
+        id: match_odds
+        env:
+          THE_ODDS_API_KEY: ${{ secrets.THE_ODDS_API_KEY }}
+        run: node scripts/scrape-match-odds.mjs
+        continue-on-error: true
+
       - name: Run forecast snapshot
         id: forecast
         run: node scripts/snapshot-forecast.mjs
@@ -49,12 +56,12 @@ jobs:
         continue-on-error: true
 
       - name: Commit snapshots if changed
-        if: steps.scrape.outcome == 'success' || steps.props.outcome == 'success' || steps.forecast.outcome == 'success'
+        if: steps.scrape.outcome == 'success' || steps.props.outcome == 'success' || steps.match_odds.outcome == 'success' || steps.forecast.outcome == 'success'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           changed=0
-          for f in data/market-snapshot.json data/player-props-2026.json data/title-history.json data/freshness.json; do
+          for f in data/market-snapshot.json data/player-props-2026.json data/match-odds.json data/title-history.json data/freshness.json; do
             if [ -f "$f" ] && ! git diff --quiet "$f"; then
               git add "$f"; changed=1
             fi
