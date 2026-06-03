@@ -559,6 +559,9 @@ export const I18N = {
       noSupabase: "Multiplayer is not configured for this deployment (NEXT_PUBLIC_SUPABASE_URL not set).",
       promptNickname: "Set a nickname before creating or joining a room.",
     },
+    install: {
+      ios: "Tap Share → \"Add to Home Screen\" to install the app.",
+    },
     notify: {
       enable: "Enable notifications",
       disable: "Disable notifications",
@@ -853,6 +856,9 @@ export const I18N = {
       noBets: "Noch keine Wetten platziert.",
       noSupabase: "Multiplayer ist für dieses Deployment nicht konfiguriert (NEXT_PUBLIC_SUPABASE_URL fehlt).",
       promptNickname: "Bitte erst einen Spitznamen setzen.",
+    },
+    install: {
+      ios: "Tippe auf Teilen → „Zum Home-Bildschirm“ um die App zu installieren.",
     },
     notify: {
       enable: "Notifications einschalten",
