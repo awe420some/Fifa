@@ -830,3 +830,41 @@ table tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.02); }
   transition: background var(--t-fast);
 }
 .pay-link:hover { background: rgba(0, 217, 126, 0.20); }
+
+/* ─────────── Onboarding tour (PR E) ─────────── */
+
+.tour-overlay { position: fixed; inset: 0; z-index: 2000; pointer-events: none; }
+.tour-overlay > * { pointer-events: auto; }
+.tour-backdrop {
+  position: absolute; inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+}
+.tour-spotlight {
+  position: absolute;
+  border-radius: var(--r-md);
+  box-shadow:
+    0 0 0 9999px rgba(0, 0, 0, 0.55),
+    0 0 0 3px rgba(0, 217, 126, 0.65),
+    0 0 30px rgba(0, 217, 126, 0.35);
+  pointer-events: none;
+  transition: top var(--t-base), left var(--t-base), width var(--t-base), height var(--t-base);
+}
+.tour-bubble {
+  position: absolute;
+  background: var(--bg-1);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-lg);
+  padding: var(--s-4);
+  box-shadow: var(--shadow-lg);
+  color: var(--ink);
+}
+.tour-bubble h4 { margin: 0 0 var(--s-2); color: var(--accent-2); font-size: 1.05rem; }
+.tour-bubble p { margin: 0 0 var(--s-3); line-height: 1.5; font-size: 0.92rem; }
+.tour-buttons { display: flex; gap: var(--s-2); justify-content: flex-end; align-items: center; flex-wrap: wrap; }
+.tour-buttons .primary {
+  background: var(--accent); color: var(--bg-0);
+  border: 0; padding: var(--s-2) var(--s-4); border-radius: var(--r-md);
+  font: inherit; font-weight: 700; cursor: pointer;
+}
+.tour-buttons .primary:hover { filter: brightness(1.05); }
+.tour-step { margin: 0 0 var(--s-1); letter-spacing: 0.08em; text-transform: uppercase; font-size: 0.72rem; }
