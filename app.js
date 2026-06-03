@@ -133,6 +133,7 @@ const state = {
   refreshing: false,            // refresh-button spinner gate
   liveOverride: false,          // force live-polling regardless of schedule window
   liveError: null,              // last /api/live fetch error message (null on success)
+  liveScheduleMap: null,        // Map<providerMatchNo → internalMatchNo (1-104)>
   // Single-open explainer slots — one per surface
   expandedTeam: null,
   expandedStage: null,
@@ -180,13 +181,16 @@ const pct = (p, d = 1) => `${(p * 100).toFixed(d)}%`;
 
 function applyI18n() {
   const dict = t();
+  // Dot-path lookup so attributes can reference nested keys like
+  // `freshness.liveToggleStart` without hoisting every string to top-level.
+  const lookup = (key) => key.split(".").reduce((d, k) => d?.[k], dict);
   $$("[data-i18n]").forEach((el) => {
-    const key = el.getAttribute("data-i18n");
-    if (typeof dict[key] === "string") el.textContent = dict[key];
+    const val = lookup(el.getAttribute("data-i18n"));
+    if (typeof val === "string") el.textContent = val;
   });
   $$("[data-i18n-placeholder]").forEach((el) => {
-    const key = el.getAttribute("data-i18n-placeholder");
-    if (typeof dict[key] === "string") el.setAttribute("placeholder", dict[key]);
+    const val = lookup(el.getAttribute("data-i18n-placeholder"));
+    if (typeof val === "string") el.setAttribute("placeholder", val);
   });
   document.title = dict.title;
   $("#snapshot-line").textContent = dict.snapshot(ELO_2026_META.asOf);
@@ -1312,6 +1316,7 @@ async function bootstrap() {
   state.freshness = await loadFreshness();
   // Live data is best-effort and may 404 on platforms without the function.
   state.live = await loadLive().catch(() => null);
+  state.liveScheduleMap = buildLiveScheduleMap();
   // 1. Fit DC on ALL historical matches (group + KO across all years).
   state.dcParams = fitDCOnHistorical(HISTORICAL_KNOCKOUTS, HISTORICAL_ELO, NEW_HISTORICAL_MATCHES);
   // 2. Squad-strength deltas.
@@ -1532,6 +1537,42 @@ function wireRefreshButton() {
   }
 }
 
+// Build a Map<providerMatchNo → internalMatchNo> by joining state.live.matches
+// against state.schedule on (kickoffUTC, sorted teamA/B pair). football-data.org
+// emits provider IDs starting at 537327; our schedule uses 1–104. KO matches
+// with empty team codes in the live feed are skipped — they get joined on a
+// later poll once the bracket fills in.
+function buildLiveScheduleMap() {
+  const map = new Map();
+  if (!state.live?.matches || !state.schedule) return map;
+  const pairKey = (a, b) => [a, b].sort().join(":");
+  const byKey = new Map();
+  for (const s of state.schedule) {
+    if (s.kickoffUTC && s.teamA && s.teamB) {
+      byKey.set(`${s.kickoffUTC}|${pairKey(s.teamA, s.teamB)}`, s.matchNo);
+    }
+  }
+  for (const m of state.live.matches) {
+    if (!m.kickoffUTC || !m.teamA || !m.teamB) continue;
+    const internal = byKey.get(`${m.kickoffUTC}|${pairKey(m.teamA, m.teamB)}`);
+    if (internal != null) map.set(m.matchNo, internal);
+  }
+  return map;
+}
+
+// Reverse lookup: given an internal schedule matchNo, return the live-match
+// snapshot from state.live (or null). Useful once renderMatchPanel starts
+// surfacing live scores.
+function getLiveForSchedule(internalMatchNo) {
+  if (!state.live?.matches || !state.liveScheduleMap) return null;
+  for (const [providerNo, internal] of state.liveScheduleMap) {
+    if (internal === internalMatchNo) {
+      return state.live.matches.find((m) => m.matchNo === providerNo) || null;
+    }
+  }
+  return null;
+}
+
 // Predicate: any scheduled match where now is between kickoff and kickoff+2h.
 function liveWindowActive() {
   if (state.liveOverride) return true;   // manual override forces polling
@@ -1557,12 +1598,24 @@ function startLivePollingIfActive() {
 }
 
 async function pollLive() {
+  // Self-stop once the last live window has naturally closed. Without this
+  // the 30 s interval would keep firing past the last kickoff+2h forever.
+  if (!liveWindowActive()) {
+    if (state.livePolling) { clearInterval(state.livePolling); state.livePolling = null; }
+    renderFreshnessBanner();
+    return;
+  }
   if (state.liveAbort) state.liveAbort.abort();
   state.liveAbort = new AbortController();
   try {
     const live = await loadLive(state.liveAbort.signal);
-    if (live) { state.live = live; state.liveError = null; }
-    else      { state.liveError = "fetch-failed"; }
+    if (live) {
+      state.live = live;
+      state.liveError = null;
+      state.liveScheduleMap = buildLiveScheduleMap();
+    } else {
+      state.liveError = "fetch-failed";
+    }
   } catch (e) {
     if (e?.name !== "AbortError") state.liveError = String(e?.message || e);
   }

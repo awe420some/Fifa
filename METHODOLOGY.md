@@ -627,16 +627,37 @@ displayed scorer / assist / minute panels; the alternatives appear in
 an "alternative matchups" block at the bottom of the detail panel
 with their joint probabilities.
 
-Honest scope: this assumes the two slots are independent, which
-overstates pairs whose teams come from the same group in early KO
-rounds (they can't meet there). The joint probability of such pairs
-is small for the most-likely picks anyway, and we don't currently
-enforce the bracket constraint; document this rather than ignore it.
+Honest scope: we apply the same-group bracket constraint as a hard
+zero on the cartesian product (two group-mates can't meet at R32 by
+construction, and at R16+ the joint probability of such pairings is
+vanishingly small), then renormalise via the Top-N sort. This removes
+the few percent of probability mass that the previous independence-
+assumption version misallocated.
 
 The renderer reuses the `.detail-grid` / `.detail-block` / `.minute-
 grid` / `.dist-row` CSS template; the only new surface elements are
 the `.match-row` and `.match-panel` wrappers + the schedule-filter
 bar in `#schedule-card`.
+
+## 5l. Live-update cadence (Hobby tier)
+
+`/api/live` is a Vercel Edge function that proxies football-data.org's
+free tier (10 req/min, 100 req/day) with a 30 s `s-maxage`
+edge-cache. The dashboard polls it every 30 s **only while a live
+window is open** — either a scheduled match is within ±2 h of
+kick-off, or the user has flipped the manual Live-Mode override.
+Outside any live window the interval self-clears so the page sits
+idle.
+
+Background freshness is handled by a GitHub Action cron
+(`*/30 * * * *`) that re-runs the scraper + snapshot writer. This
+gives a ~30 minute floor on baseline updates without a Vercel cron.
+Tighter cron updates (e.g. `*/5 * * * *` calling `/api/live` so the
+edge cache is always warm even for the first visitor of a session)
+would require the Vercel Pro tier — the current Hobby-tier limit is
+1 cron/day, which is why `vercel.json` ships without `crons`. The
+browser-polling + GitHub-Action combination delivers the same
+practical freshness without the upgrade.
 
 ## 6. Counterfactuals & a DiD case study (host effect 2010 RSA)
 
