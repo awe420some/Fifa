@@ -2954,6 +2954,108 @@ function wirePools() {
   });
 }
 
+/* ─────────── Onboarding tour ─────────── */
+//
+// 7-step welcome tour for friends arriving for the first time. Auto-switches
+// tabs as needed when the highlighted target lives in a different tab.
+// Persisted via wc26_tour_done so it shows exactly once; the Methodology tab
+// has a "Restart tour" button so it can be re-run any time.
+
+const TOUR_STEPS = [
+  { tab: "overview",    target: null,                       i18n: "step1" },
+  { tab: "overview",    target: ".tab-strip",               i18n: "step2" },
+  { tab: "overview",    target: "#top3",                    i18n: "step3" },
+  { tab: "schedule",    target: "#schedule-list",           i18n: "step4" },
+  { tab: "bets",        target: "#wallet-card",             i18n: "step5" },
+  { tab: "bets",        target: "#bet-slip",                i18n: "step6" },
+  { tab: "methodology", target: "#tour-restart",            i18n: "step7" },
+];
+
+let tourIndex = 0;
+
+function startTour() {
+  tourIndex = 0;
+  const ov = $("#tour-overlay");
+  if (ov) ov.hidden = false;
+  renderTourStep();
+}
+
+function endTour() {
+  const ov = $("#tour-overlay");
+  if (ov) ov.hidden = true;
+  try { localStorage.setItem("wc26_tour_done", "1"); } catch {}
+}
+
+function renderTourStep() {
+  const dict = t().tour || {};
+  const step = TOUR_STEPS[tourIndex];
+  if (!step) { endTour(); return; }
+  // Auto-switch tab if needed.
+  if (step.tab && step.tab !== state.activeTab) switchTab(step.tab);
+  $("#tour-step-counter").textContent = `${tourIndex + 1} / ${TOUR_STEPS.length}`;
+  const stepI18n = dict[step.i18n] || {};
+  $("#tour-title").textContent = stepI18n.title || step.i18n;
+  $("#tour-body").textContent  = stepI18n.body  || "";
+  $("#tour-prev").style.visibility = tourIndex === 0 ? "hidden" : "visible";
+  $("#tour-next").textContent = tourIndex === TOUR_STEPS.length - 1 ? (dict.done || "Fertig") : (dict.next || "Weiter");
+  // Position spotlight + bubble. Defer one frame so any auto-switched tab
+  // has rendered its sections.
+  requestAnimationFrame(() => {
+    const spot = $("#tour-spotlight");
+    const bubble = $("#tour-bubble");
+    if (!spot || !bubble) return;
+    const target = step.target ? document.querySelector(step.target) : null;
+    if (target) {
+      const r = target.getBoundingClientRect();
+      // Pad the spotlight slightly so the highlight reads.
+      const pad = 8;
+      spot.style.cssText =
+        `display:block;` +
+        `top:${r.top - pad + window.scrollY}px;` +
+        `left:${r.left - pad + window.scrollX}px;` +
+        `width:${r.width + pad * 2}px;` +
+        `height:${r.height + pad * 2}px;`;
+      // Bubble preferentially below the target, fallback above.
+      const bw = 360, bh = 180;
+      const fitsBelow = r.bottom + bh + 24 < window.innerHeight;
+      const top = fitsBelow ? r.bottom + 12 + window.scrollY : Math.max(12 + window.scrollY, r.top - bh - 12 + window.scrollY);
+      const left = Math.max(12, Math.min(window.innerWidth - bw - 12, r.left + r.width / 2 - bw / 2)) + window.scrollX;
+      bubble.style.cssText = `display:block; top:${top}px; left:${left}px; width:${bw}px;`;
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+    } else {
+      // Centered intro / no target.
+      spot.style.display = "none";
+      const bw = 420;
+      const top = Math.max(80, window.innerHeight / 2 - 100) + window.scrollY;
+      const left = Math.max(12, window.innerWidth / 2 - bw / 2) + window.scrollX;
+      bubble.style.cssText = `display:block; top:${top}px; left:${left}px; width:${bw}px;`;
+    }
+  });
+}
+
+function wireTour() {
+  const ov = $("#tour-overlay");
+  if (!ov || ov.dataset.wired) return;
+  ov.dataset.wired = "1";
+  $("#tour-prev")?.addEventListener("click", () => { if (tourIndex > 0) { tourIndex--; renderTourStep(); } });
+  $("#tour-next")?.addEventListener("click", () => {
+    if (tourIndex >= TOUR_STEPS.length - 1) endTour();
+    else { tourIndex++; renderTourStep(); }
+  });
+  $("#tour-skip")?.addEventListener("click", endTour);
+  $("#tour-restart")?.addEventListener("click", startTour);
+  // Re-position on resize so the spotlight tracks responsive shifts.
+  window.addEventListener("resize", () => { if (!ov.hidden) renderTourStep(); });
+}
+
+function maybeStartTour() {
+  let done = false;
+  try { done = localStorage.getItem("wc26_tour_done") === "1"; } catch {}
+  if (done) return;
+  // Wait a beat so the dashboard is fully painted before the overlay shows.
+  setTimeout(startTour, 600);
+}
+
 /* ─────────── Explainer panels (shared by all aggregate surfaces) ─────────── */
 
 // Renders a 4-block decomposition of a team's title forecast: model
@@ -3902,7 +4004,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     wireFriends();
     wirePools();
     wireTabs();
+    wireTour();
     switchTab(state.activeTab);
+    maybeStartTour();
     // Multiplayer is opt-in via /api/config.js; the call no-ops if the
     // Supabase env vars aren't set and the friends-card stays hidden.
     bootstrapMultiplayer();

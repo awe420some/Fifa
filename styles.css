@@ -831,24 +831,40 @@ table tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.02); }
 }
 .pay-link:hover { background: rgba(0, 217, 126, 0.20); }
 
-/* Pool picks (PR D auto-settlement) */
-.pool-picks {
-  margin-top: var(--s-3);
-  padding: var(--s-3); border: 1px solid var(--line);
+/* ─────────── Onboarding tour (PR E) ─────────── */
+
+.tour-overlay { position: fixed; inset: 0; z-index: 2000; pointer-events: none; }
+.tour-overlay > * { pointer-events: auto; }
+.tour-backdrop {
+  position: absolute; inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+}
+.tour-spotlight {
+  position: absolute;
   border-radius: var(--r-md);
-  background: rgba(255, 209, 102, 0.04);
+  box-shadow:
+    0 0 0 9999px rgba(0, 0, 0, 0.55),
+    0 0 0 3px rgba(0, 217, 126, 0.65),
+    0 0 30px rgba(0, 217, 126, 0.35);
+  pointer-events: none;
+  transition: top var(--t-base), left var(--t-base), width var(--t-base), height var(--t-base);
 }
-.pool-picks h5 { margin: 0 0 var(--s-2); font-size: 0.82rem; color: var(--accent-2); text-transform: uppercase; letter-spacing: 0.04em; }
-.pool-picks select { background: rgba(127, 168, 150, 0.10); border: 1px solid var(--line); color: var(--ink); padding: var(--s-2) var(--s-3); border-radius: var(--r-md); font: inherit; font-size: 0.9rem; min-width: 200px; }
-.ctp-row {
-  display: flex; gap: var(--s-2); align-items: center; flex-wrap: wrap;
-  padding: var(--s-1) 0; font-size: 0.9rem;
-  border-bottom: 1px dashed rgba(127, 168, 150, 0.10);
+.tour-bubble {
+  position: absolute;
+  background: var(--bg-1);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-lg);
+  padding: var(--s-4);
+  box-shadow: var(--shadow-lg);
+  color: var(--ink);
 }
-.ctp-row input.ctp-score-a,
-.ctp-row input.ctp-score-b {
-  width: 48px; text-align: center;
-  background: rgba(127, 168, 150, 0.10); border: 1px solid var(--line);
-  color: var(--ink); padding: var(--s-1) var(--s-2); border-radius: var(--r-sm); font: inherit;
+.tour-bubble h4 { margin: 0 0 var(--s-2); color: var(--accent-2); font-size: 1.05rem; }
+.tour-bubble p { margin: 0 0 var(--s-3); line-height: 1.5; font-size: 0.92rem; }
+.tour-buttons { display: flex; gap: var(--s-2); justify-content: flex-end; align-items: center; flex-wrap: wrap; }
+.tour-buttons .primary {
+  background: var(--accent); color: var(--bg-0);
+  border: 0; padding: var(--s-2) var(--s-4); border-radius: var(--r-md);
+  font: inherit; font-weight: 700; cursor: pointer;
 }
-.ctp-row input:focus { outline: none; border-color: var(--accent); }
+.tour-buttons .primary:hover { filter: brightness(1.05); }
+.tour-step { margin: 0 0 var(--s-1); letter-spacing: 0.08em; text-transform: uppercase; font-size: 0.72rem; }
