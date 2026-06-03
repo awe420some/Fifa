@@ -210,6 +210,54 @@
         <p class="muted small" data-i18n="historyHint">Updated weekly by the scrape-odds GitHub Action.</p>
       </section>
 
+      <section class="card wide reveal" id="friends-card" data-tab="bets" hidden>
+        <h3 data-i18n="friends.section">Freunde</h3>
+        <p class="muted small" data-i18n="friends.intro">Logge dich mit deiner Email ein, erstelle einen Raum oder tritt mit einem Code bei — danach siehst du eure Wetten + Rangliste live.</p>
+
+        <div id="friends-auth" class="friends-block">
+          <div id="friends-login" hidden>
+            <label class="friends-row">
+              <span data-i18n="friends.loginEmail">Email</span>
+              <input id="friends-email" type="email" autocomplete="email" placeholder="you@example.com" />
+            </label>
+            <button id="friends-login-btn" class="primary" type="button" data-i18n="friends.loginButton">Magic-Link senden</button>
+            <p id="friends-login-status" class="muted small"></p>
+          </div>
+          <div id="friends-account" hidden>
+            <span class="friends-handle"><b id="friends-user-email"></b></span>
+            <button id="friends-signout" class="copy-btn" type="button" data-i18n="friends.signout">Abmelden</button>
+          </div>
+        </div>
+
+        <div id="friends-room" class="friends-block" hidden>
+          <div id="friends-no-room">
+            <div class="friends-row">
+              <label>
+                <span data-i18n="friends.nickname">Spitzname</span>
+                <input id="friends-nickname" type="text" maxlength="20" placeholder="dein Spitzname" />
+              </label>
+            </div>
+            <div class="friends-row">
+              <button id="friends-create-room" class="primary" type="button" data-i18n="friends.createRoom">Raum erstellen</button>
+              <span class="muted">·</span>
+              <label>
+                <span data-i18n="friends.joinRoom">Beitreten mit Code</span>
+                <input id="friends-room-code" type="text" maxlength="6" placeholder="ZK7M4P" style="text-transform: uppercase" />
+              </label>
+              <button id="friends-join-room" type="button" data-i18n="friends.joinButton">Join</button>
+            </div>
+          </div>
+          <div id="friends-active-room" hidden>
+            <p><span data-i18n="friends.roomCode">Raum-Code</span>: <b id="friends-active-code"></b>
+              <button id="friends-copy-code" class="copy-btn" type="button" data-i18n="friends.copyCode">Kopieren</button>
+              <button id="friends-leave-room" class="copy-btn" type="button" data-i18n="friends.leave">Verlassen</button>
+            </p>
+          </div>
+        </div>
+
+        <div id="friends-leaderboard"></div>
+      </section>
+
       <section class="card wide reveal" id="wallet-card" data-tab="bets">
         <h3 data-i18n="wallet.section">Mein Wettverlauf</h3>
         <p class="muted small" data-i18n="wallet.intro">Klicke in einem Match-Panel auf eine Quote, um sie zum Slip rechts hinzuzufügen. Wetten werden lokal gespeichert und beim Match-Ende automatisch abgerechnet. Ausschließlich simuliert — kein echtes Geld.</p>
@@ -246,6 +294,7 @@
     <footer class="foot" id="footer-line"></footer>
   </div>
 
+  <script src="/api/config.js"></script>
   <script type="module" src="app.js"></script>
 </body>
 </html>

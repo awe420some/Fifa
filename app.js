@@ -147,6 +147,14 @@ const state = {
   liveScheduleMap: null,        // Map<providerMatchNo → internalMatchNo (1-104)>
   // Tab navigation
   activeTab: "overview",
+  // Multiplayer (Supabase) — null until /api/config.js says we're configured
+  supabase: null,
+  supabaseUser: null,
+  activeRoom: null,         // { id, code, name }
+  roomMembers: [],          // [{ user_id, nickname, joined_at }]
+  roomBets: [],             // [{ id, user_id, room_id, ... }] for active room
+  roomChannel: null,        // realtime subscription handle
+  authPending: false,
   // Bet simulator
   matchOdds: null,              // data/match-odds.json payload (per-match bookmaker quotes)
   betSlip: [],                  // [{matchNo, marketId, label, modelP, modelOdds, marketOdds, outcome}]
@@ -1911,6 +1919,9 @@ function placeBet() {
   persistBetState();
   renderBetSlip();
   renderWallet();
+  // Push to Supabase (if logged in + in a room) so friends see it live.
+  // Fire-and-forget; never blocks the local flow.
+  pushBetToRoom(bet).then(() => renderFriends()).catch(() => {});
   // Re-render any open match panels so the now-deselected cells lose .selected.
   if (state.expandedMatch != null) renderGroups();
   renderScheduleSection();
@@ -1968,6 +1979,8 @@ function settleFinishedBets() {
   if (changed) {
     persistBetState();
     renderWallet();
+    // Mirror settlement to Supabase so the leaderboard stays in sync.
+    pushSettledBets().then(() => renderFriends()).catch(() => {});
   }
 }
 
@@ -2073,6 +2086,349 @@ function wireBetSlip() {
     persistBetState();
     renderWallet();
   });
+}
+
+/* ─────────── Multiplayer (Supabase) ─────────── */
+
+// Loaded lazily — only when /api/config.js says WC26_SUPABASE is set.
+// Otherwise the entire #friends-card stays hidden and the bets pipeline
+// remains pure localStorage (single-player).
+async function initSupabase() {
+  const cfg = (typeof window !== "undefined") ? window.WC26_SUPABASE : null;
+  if (!cfg || !cfg.url || !cfg.anonKey) return null;
+  try {
+    const mod = await import("https://esm.sh/@supabase/supabase-js@2");
+    const client = mod.createClient(cfg.url, cfg.anonKey, {
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+    });
+    return client;
+  } catch (e) {
+    console.warn("Supabase init failed (multiplayer hidden):", e?.message || e);
+    return null;
+  }
+}
+
+async function refreshSupabaseUser() {
+  if (!state.supabase) return;
+  try {
+    const { data } = await state.supabase.auth.getUser();
+    state.supabaseUser = data?.user || null;
+  } catch {
+    state.supabaseUser = null;
+  }
+}
+
+async function sendMagicLink(email) {
+  if (!state.supabase || !email) return false;
+  state.authPending = true;
+  renderFriends();
+  try {
+    const { error } = await state.supabase.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: location.origin + location.pathname },
+    });
+    state.authPending = false;
+    renderFriends();
+    return !error;
+  } catch {
+    state.authPending = false;
+    renderFriends();
+    return false;
+  }
+}
+
+async function supabaseSignOut() {
+  if (!state.supabase) return;
+  await leaveActiveRoom();
+  await state.supabase.auth.signOut().catch(() => {});
+  state.supabaseUser = null;
+  state.activeRoom = null;
+  state.roomMembers = [];
+  state.roomBets = [];
+  try { localStorage.removeItem("wc26_active_room"); } catch {}
+  renderFriends();
+}
+
+function genRoomCode() {
+  // 6-char base32, A–Z + 2–9 minus easily-confused chars.
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let s = "";
+  for (let i = 0; i < 6; i++) s += alphabet[Math.floor(Math.random() * alphabet.length)];
+  return s;
+}
+
+async function createRoom(nickname) {
+  if (!state.supabase || !state.supabaseUser || !nickname) return null;
+  const code = genRoomCode();
+  const { data: room, error: roomErr } = await state.supabase
+    .from("rooms").insert({ code, name: null }).select().single();
+  if (roomErr || !room) return null;
+  const { error: memberErr } = await state.supabase
+    .from("room_members").insert({ room_id: room.id, user_id: state.supabaseUser.id, nickname });
+  if (memberErr) return null;
+  return room;
+}
+
+async function joinRoomByCode(code, nickname) {
+  if (!state.supabase || !state.supabaseUser || !nickname || !code) return null;
+  const { data: room } = await state.supabase
+    .from("rooms").select().eq("code", code.toUpperCase()).maybeSingle();
+  if (!room) return null;
+  // upsert membership so re-joining doesn't error
+  await state.supabase
+    .from("room_members")
+    .upsert({ room_id: room.id, user_id: state.supabaseUser.id, nickname }, { onConflict: "room_id,user_id" });
+  return room;
+}
+
+async function activateRoom(room) {
+  state.activeRoom = room;
+  try { localStorage.setItem("wc26_active_room", JSON.stringify(room)); } catch {}
+  await loadRoomData();
+  subscribeRoomRealtime();
+  renderFriends();
+}
+
+async function leaveActiveRoom() {
+  if (!state.activeRoom) return;
+  if (state.roomChannel) {
+    try { await state.supabase.removeChannel(state.roomChannel); } catch {}
+    state.roomChannel = null;
+  }
+  if (state.supabase && state.supabaseUser) {
+    await state.supabase
+      .from("room_members")
+      .delete()
+      .match({ room_id: state.activeRoom.id, user_id: state.supabaseUser.id });
+  }
+  state.activeRoom = null;
+  state.roomMembers = [];
+  state.roomBets = [];
+  try { localStorage.removeItem("wc26_active_room"); } catch {}
+  renderFriends();
+}
+
+async function loadRoomData() {
+  if (!state.supabase || !state.activeRoom) return;
+  const roomId = state.activeRoom.id;
+  const [{ data: members }, { data: bets }] = await Promise.all([
+    state.supabase.from("room_members").select().eq("room_id", roomId),
+    state.supabase.from("bets").select().eq("room_id", roomId).order("placed_at", { ascending: false }).limit(500),
+  ]);
+  state.roomMembers = Array.isArray(members) ? members : [];
+  state.roomBets = Array.isArray(bets) ? bets : [];
+}
+
+function subscribeRoomRealtime() {
+  if (!state.supabase || !state.activeRoom) return;
+  if (state.roomChannel) { try { state.supabase.removeChannel(state.roomChannel); } catch {} state.roomChannel = null; }
+  const roomId = state.activeRoom.id;
+  const ch = state.supabase.channel(`room:${roomId}`)
+    .on("postgres_changes",
+      { event: "*", schema: "public", table: "bets", filter: `room_id=eq.${roomId}` },
+      () => loadRoomData().then(renderFriends))
+    .on("postgres_changes",
+      { event: "*", schema: "public", table: "room_members", filter: `room_id=eq.${roomId}` },
+      () => loadRoomData().then(renderFriends))
+    .subscribe();
+  state.roomChannel = ch;
+}
+
+// Sync a placed bet to Supabase if the user is in a room.
+async function pushBetToRoom(bet) {
+  if (!state.supabase || !state.supabaseUser || !state.activeRoom) return;
+  try {
+    const row = {
+      id: bet.id,
+      user_id: state.supabaseUser.id,
+      room_id: state.activeRoom.id,
+      placed_at: bet.placedAt,
+      stake: bet.stake,
+      combo_odds: bet.comboOdds,
+      combo_market_odds: bet.comboMarketOdds,
+      items: bet.items,
+      status: bet.status,
+      payout: bet.payout,
+      settled_at: bet.settledAt,
+    };
+    await state.supabase.from("bets").upsert(row, { onConflict: "id" });
+  } catch (e) {
+    console.warn("pushBetToRoom failed:", e?.message || e);
+  }
+}
+
+// After settlement, push status + payout updates for our own bets to Supabase.
+async function pushSettledBets() {
+  if (!state.supabase || !state.supabaseUser || !state.activeRoom) return;
+  const ours = state.betHistory.filter((b) => b.status !== "open");
+  for (const b of ours) {
+    try {
+      await state.supabase
+        .from("bets")
+        .update({ status: b.status, payout: b.payout, settled_at: b.settledAt })
+        .match({ id: b.id });
+    } catch { /* ignore */ }
+  }
+}
+
+function renderFriends() {
+  const dict = t();
+  const f = dict.friends || {};
+  const card = $("#friends-card");
+  if (!card) return;
+  if (!state.supabase) {
+    // Multiplayer not configured — hide entirely.
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+  // Auth area
+  const loginEl = $("#friends-login");
+  const accountEl = $("#friends-account");
+  const roomEl = $("#friends-room");
+  if (state.supabaseUser) {
+    if (loginEl) loginEl.hidden = true;
+    if (accountEl) accountEl.hidden = false;
+    if (roomEl) roomEl.hidden = false;
+    const emailEl = $("#friends-user-email");
+    if (emailEl) emailEl.textContent = state.supabaseUser.email || "—";
+  } else {
+    if (loginEl) loginEl.hidden = false;
+    if (accountEl) accountEl.hidden = true;
+    if (roomEl) roomEl.hidden = true;
+    const status = $("#friends-login-status");
+    if (status) status.textContent = state.authPending ? (f.loginPending || "Check your inbox.") : "";
+  }
+  // Room area
+  if (state.activeRoom) {
+    const noRoom = $("#friends-no-room");
+    const active = $("#friends-active-room");
+    if (noRoom) noRoom.hidden = true;
+    if (active) active.hidden = false;
+    const codeEl = $("#friends-active-code");
+    if (codeEl) codeEl.textContent = state.activeRoom.code;
+  } else {
+    const noRoom = $("#friends-no-room");
+    const active = $("#friends-active-room");
+    if (noRoom) noRoom.hidden = false;
+    if (active) active.hidden = true;
+  }
+  // Leaderboard
+  const lb = $("#friends-leaderboard");
+  if (!lb) return;
+  if (!state.supabaseUser) { lb.innerHTML = ""; return; }
+  if (!state.activeRoom) { lb.innerHTML = `<p class="muted small">${escape(f.noMembers || "Create or join a room.")}</p>`; return; }
+  if (!state.roomMembers.length) { lb.innerHTML = `<p class="muted small">${escape(f.noMembers || "Waiting for friends.")}</p>`; return; }
+  // Compute per-member aggregates from state.roomBets.
+  const byUser = new Map();
+  for (const m of state.roomMembers) byUser.set(m.user_id, { nick: m.nickname, total: 0, won: 0, lost: 0, open: 0, pl: 0, edgeSum: 0, edgeN: 0, last5: [] });
+  for (const b of state.roomBets) {
+    const agg = byUser.get(b.user_id);
+    if (!agg) continue;
+    agg.total++;
+    if (b.status === "won") agg.won++;
+    else if (b.status === "lost") agg.lost++;
+    else if (b.status === "open") agg.open++;
+    if (b.status !== "open") agg.pl += (Number(b.payout) || 0) - Number(b.stake);
+    if (b.combo_market_odds && b.combo_odds) {
+      agg.edgeSum += (Number(b.combo_odds) / Number(b.combo_market_odds)) - 1;
+      agg.edgeN++;
+    }
+    if (agg.last5.length < 5) {
+      const it = b.items?.[0];
+      const labels = (b.items || []).map((i) => i?.label).filter(Boolean).join(" · ");
+      agg.last5.push({ status: b.status, odds: b.combo_odds, label: labels || "—" });
+    }
+  }
+  const rows = Array.from(byUser.values())
+    .sort((a, b) => b.pl - a.pl || b.won - a.won);
+  lb.innerHTML = `
+    <h4>${escape(f.leaderboardHeader || "Leaderboard")}</h4>
+    <table class="wallet-table">
+      <thead><tr>
+        <th>${escape(f.colRank || "#")}</th>
+        <th>${escape(f.colNick || "Nick")}</th>
+        <th>${escape(f.colBets || "Bets")}</th>
+        <th>${escape(f.colHitrate || "Hit")}</th>
+        <th>${escape(f.colPL || "P&L")}</th>
+        <th>${escape(f.colEdge || "Edge")}</th>
+        <th>${escape(f.last5 || "Last 5")}</th>
+      </tr></thead>
+      <tbody>
+        ${rows.map((r, i) => {
+          const decided = r.won + r.lost;
+          const hit = decided ? `${Math.round((r.won / decided) * 100)}%` : "—";
+          const edge = r.edgeN ? `${((r.edgeSum / r.edgeN) * 100).toFixed(1)}%` : "—";
+          const plCls = r.pl > 0 ? "edge-pos" : r.pl < 0 ? "edge-neg" : "muted";
+          const last = r.last5.map((b) => {
+            const ico = b.status === "won" ? "✓" : b.status === "lost" ? "✗" : b.status === "void" ? "○" : "·";
+            const cls = b.status === "won" ? "edge-pos" : b.status === "lost" ? "edge-neg" : "muted";
+            return `<span class="${cls}" title="${escape(b.label)}">${ico} ${Number(b.odds).toFixed(2)}</span>`;
+          }).join(" ");
+          return `<tr>
+            <td>${i + 1}</td>
+            <td><b>${escape(r.nick)}</b></td>
+            <td>${r.total}</td>
+            <td>${hit}</td>
+            <td class="${plCls}">${fmtPL(r.pl)}</td>
+            <td>${edge}</td>
+            <td class="small">${last || "—"}</td>
+          </tr>`;
+        }).join("")}
+      </tbody>
+    </table>`;
+}
+
+function wireFriends() {
+  const card = $("#friends-card");
+  if (!card || card.dataset.wired) return;
+  card.dataset.wired = "1";
+
+  $("#friends-login-btn")?.addEventListener("click", async () => {
+    const email = $("#friends-email")?.value?.trim();
+    if (!email) return;
+    await sendMagicLink(email);
+  });
+  $("#friends-signout")?.addEventListener("click", supabaseSignOut);
+  $("#friends-create-room")?.addEventListener("click", async () => {
+    const nick = $("#friends-nickname")?.value?.trim();
+    if (!nick) { alert(t().friends?.promptNickname || "Set a nickname first."); return; }
+    const room = await createRoom(nick);
+    if (room) await activateRoom(room);
+  });
+  $("#friends-join-room")?.addEventListener("click", async () => {
+    const code = $("#friends-room-code")?.value?.trim();
+    const nick = $("#friends-nickname")?.value?.trim();
+    if (!code || !nick) { alert(t().friends?.promptNickname || "Set a nickname and code first."); return; }
+    const room = await joinRoomByCode(code, nick);
+    if (room) await activateRoom(room);
+  });
+  $("#friends-copy-code")?.addEventListener("click", async () => {
+    if (!state.activeRoom) return;
+    try { await navigator.clipboard.writeText(state.activeRoom.code); } catch {}
+  });
+  $("#friends-leave-room")?.addEventListener("click", leaveActiveRoom);
+}
+
+async function bootstrapMultiplayer() {
+  state.supabase = await initSupabase();
+  if (!state.supabase) { renderFriends(); return; }
+  await refreshSupabaseUser();
+  // Auth changes (e.g. magic-link landing back on /).
+  state.supabase.auth.onAuthStateChange(async (_event, session) => {
+    state.supabaseUser = session?.user || null;
+    renderFriends();
+  });
+  // Restore active room from localStorage if any.
+  try {
+    const stored = JSON.parse(localStorage.getItem("wc26_active_room") || "null");
+    if (stored?.id && stored?.code && state.supabaseUser) {
+      state.activeRoom = stored;
+      await loadRoomData();
+      subscribeRoomRealtime();
+    }
+  } catch {}
+  renderFriends();
 }
 
 /* ─────────── Explainer panels (shared by all aggregate surfaces) ─────────── */
@@ -3020,8 +3376,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     renderAll();
     wireRefreshButton();
     wireBetSlip();
+    wireFriends();
     wireTabs();
     switchTab(state.activeTab);
+    // Multiplayer is opt-in via /api/config.js; the call no-ops if the
+    // Supabase env vars aren't set and the friends-card stays hidden.
+    bootstrapMultiplayer();
     startLivePollingIfActive();
     // Persist the current snapshot so the NEXT visit can diff against it.
     persistPrev(cloneCurrentSnapshot());

@@ -761,3 +761,30 @@ table tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.02); }
 
 /* Sub-headers inside cards (h4) — tighter, less SHOUT */
 .card h4 { font-weight: 600; letter-spacing: 0.04em; }
+
+/* ─────────── Friends / multiplayer ─────────── */
+
+.friends-block { margin: var(--s-4) 0; }
+.friends-row {
+  display: inline-flex; gap: var(--s-2); align-items: center; flex-wrap: wrap;
+  margin-right: var(--s-3);
+}
+.friends-row label { display: inline-flex; align-items: center; gap: var(--s-2); }
+.friends-row input {
+  background: rgba(127, 168, 150, 0.08);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-md);
+  font: inherit; font-size: 0.9rem;
+  min-width: 180px;
+}
+.friends-row input:focus { outline: none; border-color: var(--accent); }
+.friends-row button.primary {
+  background: var(--accent); color: var(--bg-0);
+  border: 0; padding: var(--s-2) var(--s-4); border-radius: var(--r-md);
+  font: inherit; font-weight: 700; cursor: pointer;
+}
+.friends-row button.primary:hover { filter: brightness(1.05); }
+.friends-handle b { color: var(--accent); }
+#friends-leaderboard table { margin-top: var(--s-3); }
