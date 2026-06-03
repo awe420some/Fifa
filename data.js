@@ -447,6 +447,15 @@ export const I18N = {
       live: "LIVE",
       fulltime: "FT",
     },
+    tabs: {
+      overview: "Overview",
+      stages: "Stages & Groups",
+      markets: "Markets",
+      schedule: "Schedule",
+      players: "Players",
+      bets: "Bets & Wallet",
+      methodology: "Methodology",
+    },
     bets: {
       title: "Betting markets (simulated)",
       main: "Main markets",
@@ -643,6 +652,15 @@ export const I18N = {
       alternatives: "Alternative Matchups",
       live: "LIVE",
       fulltime: "Endstand",
+    },
+    tabs: {
+      overview: "Übersicht",
+      stages: "Phasen & Gruppen",
+      markets: "Märkte",
+      schedule: "Spielplan",
+      players: "Spieler",
+      bets: "Wetten & Wallet",
+      methodology: "Methodik",
     },
     bets: {
       title: "Wettmärkte (simuliert)",

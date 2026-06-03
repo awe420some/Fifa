@@ -47,9 +47,11 @@ async function scrapeDraftKingsPlayerProps(browser) {
   const ctx = await browser.newContext({ userAgent: UA });
   const page = await ctx.newPage();
   const scrapeCategoryPage = async (url) => {
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
-    const items = await page.evaluate(() => {
+    const resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    const status = resp?.status() ?? 0;
+    const result = await page.evaluate(() => {
       const out = [];
+      const samples = [];
       document.querySelectorAll("a, div, span, li").forEach((el) => {
         const t = el.textContent;
         if (!t) return;
@@ -60,11 +62,17 @@ async function scrapeDraftKingsPlayerProps(browser) {
             out.push({ name, american: m[2] });
           }
         }
+        if (samples.length < 5 && /\d/.test(t) && t.length < 80 && t.trim().length > 4) samples.push(t.trim());
       });
-      return out;
+      return { items: out, samples, htmlLen: document.documentElement.outerHTML.length };
     });
+    if (result.items.length === 0) {
+      console.warn(`  diag: ${url}`);
+      console.warn(`    status=${status} html=${result.htmlLen} chars matched=0`);
+      console.warn(`    sample candidates:`, result.samples.slice(0, 5));
+    }
     const odds = {};
-    for (const it of items) {
+    for (const it of result.items) {
       const p = americanToImplied(it.american);
       if (p == null || p <= 0 || p >= 1) continue;
       odds[it.name] = p;
@@ -84,6 +92,7 @@ async function scrapeDraftKingsPlayerProps(browser) {
   } catch { /* leave empty */ }
   await ctx.close();
   if (Object.keys(topScorer).length === 0 && Object.keys(anytimeScorer).length === 0) {
+    console.warn(`  diag: draftkings — see per-category diagnostics above`);
     throw new Error("draftkings: no player props parsed from either market");
   }
   return { source: "DraftKings", topScorer, anytimeScorer };
@@ -112,7 +121,11 @@ async function scrapePolymarketPlayerProps(browser) {
       if (p > 0 && p < 1 && name.split(/\s+/).length >= 2) topScorer[name] = p;
     }
   }
-  if (Object.keys(topScorer).length < 3) throw new Error("polymarket: too few players parsed");
+  if (Object.keys(topScorer).length < 3) {
+    console.warn(`  diag: polymarket parsed ${Object.keys(topScorer).length} players from ${rows.length} candidate rows`);
+    console.warn(`    sample rows:`, rows.slice(0, 5));
+    throw new Error("polymarket: too few players parsed");
+  }
   // Polymarket doesn't post per-player anytime-scorer markets; return empty.
   return { source: "Polymarket", topScorer, anytimeScorer: {} };
 }

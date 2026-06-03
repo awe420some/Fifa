@@ -16,6 +16,11 @@ const SNAPSHOT_DATE = new Date().toISOString().slice(0, 10);
 const OUTPUT_PATH = resolve(process.cwd(), "data/market-snapshot.json");
 const PER_SOURCE_TIMEOUT_MS = 60_000;
 
+// User-Agent for headless Chromium contexts. Each scraper opens a fresh
+// context with userAgent: ua() so bot-detection that profiles UA strings
+// gets a realistic Chrome desktop signature.
+const ua = () => "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36";
+
 // Maps the raw team strings each site uses to our FIFA codes.
 const NAME_TO_CODE = {
   // English long names

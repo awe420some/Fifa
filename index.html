@@ -21,6 +21,9 @@
   <meta name="twitter:image" content="og-image.png" />
 
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
 
   <!-- PWA: installable on phone / tablet / desktop home screen -->
@@ -79,7 +82,17 @@
         <button id="fb-live-toggle" class="fb-btn fb-btn-secondary" type="button"></button>
         <button id="fb-refresh" class="fb-btn" type="button">Refresh</button>
       </div>
-      <section class="card top3-card">
+      <nav class="tab-strip" id="tab-strip" role="tablist" aria-label="Sections">
+        <button class="tab-link" data-tab="overview" type="button" role="tab"><span data-i18n="tabs.overview">Overview</span></button>
+        <button class="tab-link" data-tab="stages" type="button" role="tab"><span data-i18n="tabs.stages">Stages &amp; Groups</span></button>
+        <button class="tab-link" data-tab="markets" type="button" role="tab"><span data-i18n="tabs.markets">Markets</span></button>
+        <button class="tab-link" data-tab="schedule" type="button" role="tab"><span data-i18n="tabs.schedule">Schedule</span></button>
+        <button class="tab-link" data-tab="players" type="button" role="tab"><span data-i18n="tabs.players">Players</span></button>
+        <button class="tab-link" data-tab="bets" type="button" role="tab"><span data-i18n="tabs.bets">Bets &amp; Wallet</span></button>
+        <button class="tab-link" data-tab="methodology" type="button" role="tab"><span data-i18n="tabs.methodology">Methodology</span></button>
+      </nav>
+
+      <section class="card top3-card" data-tab="overview">
         <h3 data-i18n="sectionTop3">Top 3 Favorites</h3>
         <div id="top3" class="top3-grid"></div>
         <div class="scenario-row">
@@ -101,40 +114,40 @@
         </div>
       </section>
 
-      <section class="card wide reveal">
+      <section class="card wide reveal" data-tab="overview">
         <h3 data-i18n="modelBreakdownHeader">Model breakdown</h3>
         <div id="model-breakdown"></div>
       </section>
 
-      <section class="card wide reveal">
+      <section class="card wide reveal" data-tab="overview">
         <h3 data-i18n="sectionDistribution">Full Title Probability</h3>
         <div id="distribution"></div>
         <button id="toggle-distribution" class="copy-btn" type="button" data-i18n="showAll">Show all 48 teams</button>
       </section>
 
-      <section class="card wide reveal">
+      <section class="card wide reveal" data-tab="stages">
         <h3 data-i18n="sectionStages">Stage-by-Stage Probabilities (Top 12)</h3>
         <div id="stages"></div>
       </section>
 
-      <section class="card wide reveal">
+      <section class="card wide reveal" data-tab="markets">
         <h3 data-i18n="sectionMarket">Model vs Market</h3>
         <div id="market-summary" class="muted"></div>
         <div id="market"></div>
       </section>
 
-      <section class="card wide reveal" id="team-matrix-card">
+      <section class="card wide reveal" id="team-matrix-card" data-tab="markets">
         <h3 data-i18n="sectionTeamMatrix">Team Market Matrix — Model vs Market</h3>
         <p class="muted small" data-i18n="teamMatrixHint">Click a column header to sort by that stage's diff. Market quotes from DraftKings + Polymarket aggregate (de-vigged); stages beyond title currently market-blocked, shown as n/v.</p>
         <div id="team-matrix"></div>
       </section>
 
-      <section class="card wide reveal">
+      <section class="card wide reveal" data-tab="stages">
         <h3 data-i18n="sectionGroups">Expected Group Standings</h3>
         <div id="groups" class="group-grid"></div>
       </section>
 
-      <section class="card wide reveal" id="schedule-card" hidden>
+      <section class="card wide reveal" id="schedule-card" data-tab="schedule" hidden>
         <h3 data-i18n="sectionSchedule">Schedule & per-match forecasts</h3>
         <p class="muted small"><span data-i18n="scheduleHint">Click any match below to see who's likely to score, when, and who'll assist. KO matches show the most-likely matchup based on the MC's bracket projection.</span> <span class="muted">(<span id="schedule-count">104</span> <span data-i18n="scheduleMatchesLabel">matches</span>)</span></p>
         <div class="schedule-filters">
@@ -148,7 +161,7 @@
         <div id="schedule-list"></div>
       </section>
 
-      <section class="card wide reveal" id="players-card">
+      <section class="card wide reveal" id="players-card" data-tab="players">
         <h3 data-i18n="sectionPlayers">Player Predictions</h3>
         <p class="muted small" data-i18n="playersHint"></p>
         <div class="players-controls">
@@ -182,7 +195,7 @@
         </div>
       </section>
 
-      <section class="card wide reveal">
+      <section class="card wide reveal" data-tab="methodology">
         <h3 data-i18n="sectionBacktest">Backtest 1994–2022</h3>
         <div id="backtest-summary" class="muted"></div>
         <div id="backtest"></div>
@@ -191,13 +204,13 @@
         <p class="muted small">Dots: each prediction-probability bin · diagonal = perfect calibration · point size scales with sample count.</p>
       </section>
 
-      <section class="card wide reveal" id="history-card" hidden>
+      <section class="card wide reveal" id="history-card" data-tab="methodology" hidden>
         <h3 data-i18n="sectionHistory">Title-Probability Over Time</h3>
         <div id="title-history"></div>
         <p class="muted small" data-i18n="historyHint">Updated weekly by the scrape-odds GitHub Action.</p>
       </section>
 
-      <section class="card wide reveal" id="wallet-card">
+      <section class="card wide reveal" id="wallet-card" data-tab="bets">
         <h3 data-i18n="wallet.section">Mein Wettverlauf</h3>
         <p class="muted small" data-i18n="wallet.intro">Klicke in einem Match-Panel auf eine Quote, um sie zum Slip rechts hinzuzufügen. Wetten werden lokal gespeichert und beim Match-Ende automatisch abgerechnet. Ausschließlich simuliert — kein echtes Geld.</p>
         <div class="wallet-stats">
@@ -211,12 +224,12 @@
         <button id="wallet-reset" class="copy-btn" type="button" data-i18n="wallet.reset">P&amp;L zurücksetzen</button>
       </section>
 
-      <section class="card wide reveal">
+      <section class="card wide reveal" data-tab="methodology">
         <h3 data-i18n="sectionContext">96 Years of Statistics</h3>
         <div id="context"></div>
       </section>
 
-      <section class="card wide reveal">
+      <section class="card wide reveal" data-tab="methodology">
         <h3 data-i18n="sectionSources">Data Sources & Methodology</h3>
         <p id="methodology-text" class="muted"></p>
         <p class="muted"><span data-i18n="weightsLabel">Ensemble weights:</span> <span id="weights-display"></span></p>
