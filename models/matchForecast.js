@@ -17,10 +17,10 @@
 //   - state.mc.groupPositionDistribution[code].pN for direct slots
 //   - recursive expansion of Wnnn/Lnnn via matchProbs of the upstream slots
 // Then enumerate the top-3 most-likely (teamA, teamB) pairings by joint
-// probability and compute a per-matchup forecast. Honest about the
-// independence assumption (we ignore the bracket constraint that teams
-// from the same group can't meet in the early rounds — joint probability
-// of such pairings is negligible for the top picks anyway).
+// probability and compute a per-matchup forecast. The same-group bracket
+// constraint (two group-mates can't meet at R32) is enforced as a hard zero
+// in the cartesian product; at R16+ the constraint relaxes but joint
+// probabilities of group-mate matchups are vanishingly small anyway.
 
 import { precomputeShares, GOAL_MINUTE_BINS } from "./players.js";
 import { matchProbs } from "../predictor.js";
@@ -208,19 +208,25 @@ function topPlayers(shares, lambda, topN) {
 // For a KO match: enumerates top-3 (teamA, teamB) pairings by joint
 // slot-probability and returns one forecast per matchup, sorted by joint p.
 function forecastMatch(match, ctx) {
-  const { groupsByLetter, groupPos, mc, schedule, matchProbsFn, sharesByCode, slotCache } = ctx;
+  const { groupsByLetter, groupPos, mc, schedule, matchProbsFn, sharesByCode, slotCache, groupOf } = ctx;
   if (match.stage === "group") {
     const fc = forecastMatchup(match.teamA, match.teamB, sharesByCode, matchProbsFn);
     if (!fc) return { stage: "group", matchups: [] };
     return { stage: "group", matchups: [{ ...fc, matchupProb: 1 }] };
   }
-  // KO: resolve both slots, take top-3 joint pairings.
+  // KO: resolve both slots, take top-3 joint pairings. Two teams that finished
+  // in the same group cannot meet at R32 (structurally enforced by the bracket)
+  // and meet only with vanishingly small joint probability at R16+; skip such
+  // pairs and let the Top-N sort redistribute the mass to plausible matchups.
   const distA = resolveSlot(match.teamA, groupsByLetter, groupPos, mc, schedule, matchProbsFn, slotCache);
   const distB = resolveSlot(match.teamB, groupsByLetter, groupPos, mc, schedule, matchProbsFn, slotCache);
   const pairs = [];
   for (const [a, pa] of distA) {
     for (const [b, pb] of distB) {
       if (a === b) continue;
+      const gA = groupOf?.get(a);
+      const gB = groupOf?.get(b);
+      if (gA && gB && gA === gB) continue;  // same-group bracket constraint
       pairs.push({ a, b, p: pa * pb });
     }
   }
@@ -243,6 +249,12 @@ export function buildAllMatchForecasts(schedule, mc, makeMatchProbs, options = {
   const groupPos = mc.groupPositionDistribution || {};
   const sharesByCode = precomputeShares();
   const slotCache = new Map();
+  // Invert groupsByLetter into Map<teamCode, groupLetter> for the R32+
+  // same-group bracket-constraint filter in forecastMatch().
+  const groupOf = new Map();
+  for (const letter of Object.keys(groupsByLetter || {})) {
+    for (const code of groupsByLetter[letter] || []) groupOf.set(code, letter);
+  }
   const ctx = {
     groupsByLetter,
     groupPos,
@@ -251,6 +263,7 @@ export function buildAllMatchForecasts(schedule, mc, makeMatchProbs, options = {
     matchProbsFn: makeMatchProbs,
     sharesByCode,
     slotCache,
+    groupOf,
   };
   const out = new Map();
   for (const m of schedule) {
