@@ -145,6 +145,8 @@ const state = {
   liveOverride: false,          // force live-polling regardless of schedule window
   liveError: null,              // last /api/live fetch error message (null on success)
   liveScheduleMap: null,        // Map<providerMatchNo → internalMatchNo (1-104)>
+  // Tab navigation
+  activeTab: "overview",
   // Bet simulator
   matchOdds: null,              // data/match-odds.json payload (per-match bookmaker quotes)
   betSlip: [],                  // [{matchNo, marketId, label, modelP, modelOdds, marketOdds, outcome}]
@@ -879,6 +881,13 @@ function setupScenarios() {
   const dash = $("#dashboard");
   if (dash) {
     dash.addEventListener("click", (e) => {
+      // (-1) Tab switching — fires before form-control early-return so the
+      // <button.tab-link> can be picked up via delegation.
+      const tabLink = e.target.closest(".tab-link[data-tab]");
+      if (tabLink) {
+        switchTab(tabLink.dataset.tab);
+        return;
+      }
       // (0) Click-to-bet — fires BEFORE the form-control early-return so
       // the <button.bet-cell> can be picked up via delegation.
       const betCell = e.target.closest(".bet-cell[data-bet]");
@@ -1417,6 +1426,15 @@ async function bootstrap() {
   // Restore manual live-override from localStorage so polling can start
   // immediately on reload without waiting for the user to flip the toggle.
   try { state.liveOverride = localStorage.getItem("wc26_live_override") === "1"; } catch {}
+  // Restore active tab: URL hash beats localStorage beats default.
+  try {
+    const fromHash = location.hash.replace(/^#/, "");
+    if (TAB_NAMES.includes(fromHash)) state.activeTab = fromHash;
+    else {
+      const fromLs = localStorage.getItem("wc26_active_tab");
+      if (TAB_NAMES.includes(fromLs)) state.activeTab = fromLs;
+    }
+  } catch {}
   // Restore bet-simulator state from localStorage (slip + history + stake).
   try {
     const slip = JSON.parse(localStorage.getItem("wc26_betslip_v1") || "[]");
@@ -1474,6 +1492,39 @@ function renderAll() {
   renderWallet();
   renderBetSlip();
   fireConfetti();
+}
+
+/* ─────────── Tab navigation ─────────── */
+
+const TAB_NAMES = ["overview", "stages", "markets", "schedule", "players", "bets", "methodology"];
+
+function switchTab(name) {
+  if (!TAB_NAMES.includes(name)) name = "overview";
+  state.activeTab = name;
+  // Toggle visibility on every section tagged with data-tab. The schedule
+  // and history cards keep their own hidden attribute as "not yet ready"
+  // gating — we only flip the tab visibility, not those.
+  document.querySelectorAll("section[data-tab]").forEach((el) => {
+    const matches = el.dataset.tab === name;
+    el.classList.toggle("tab-hidden", !matches);
+  });
+  document.querySelectorAll(".tab-link").forEach((b) => {
+    const matches = b.dataset.tab === name;
+    b.classList.toggle("active", matches);
+    b.setAttribute("aria-selected", matches ? "true" : "false");
+  });
+  try { localStorage.setItem("wc26_active_tab", name); } catch {}
+  if (location.hash !== "#" + name) {
+    history.replaceState(null, "", "#" + name);
+  }
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function wireTabs() {
+  window.addEventListener("hashchange", () => {
+    const name = location.hash.replace(/^#/, "");
+    if (TAB_NAMES.includes(name)) switchTab(name);
+  });
 }
 
 /* ─────────── Freshness banner + diff + live polling ─────────── */
@@ -2969,6 +3020,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     renderAll();
     wireRefreshButton();
     wireBetSlip();
+    wireTabs();
+    switchTab(state.activeTab);
     startLivePollingIfActive();
     // Persist the current snapshot so the NEXT visit can diff against it.
     persistPrev(cloneCurrentSnapshot());
