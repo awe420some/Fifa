@@ -258,6 +258,51 @@
         <div id="friends-leaderboard"></div>
       </section>
 
+      <section class="card wide reveal" id="pools-card" data-tab="bets" hidden>
+        <h3 data-i18n="pools.section">Echtgeld-Pools</h3>
+        <p class="muted small" data-i18n="pools.intro">Erstelle einen Pool mit deinen Friends — jeder zahlt seinen Buy-in über seine Lieblings-Payment-App (Venmo/PayPal/Revolut/SEPA), und am Ende kriegt der Gewinner den ganzen Pot. Du bestimmst Typ + Buy-in + End-Datum.</p>
+
+        <div id="payment-handles-block" class="friends-block">
+          <h4 data-i18n="pools.handlesHeader">Deine Payment-Handles</h4>
+          <p class="muted small" data-i18n="pools.handlesIntro">Trag hier deine Handles ein, damit Friends dich bezahlen können (gespeichert in deinem Account).</p>
+          <div class="friends-row">
+            <label>Venmo <input id="ph-venmo" type="text" placeholder="@username" /></label>
+            <label>PayPal <input id="ph-paypal" type="text" placeholder="paypal.me/handle" /></label>
+            <label>Revolut <input id="ph-revolut" type="text" placeholder="@handle" /></label>
+          </div>
+          <div class="friends-row">
+            <label>IBAN <input id="ph-sepa" type="text" placeholder="DE..." style="min-width: 280px" /></label>
+            <button id="ph-save" class="primary" type="button" data-i18n="pools.handlesSave">Speichern</button>
+            <span id="ph-status" class="muted small"></span>
+          </div>
+        </div>
+
+        <div id="pools-create-block" class="friends-block">
+          <h4 data-i18n="pools.createHeader">Neuen Pool starten</h4>
+          <div class="friends-row">
+            <label><span data-i18n="pools.poolName">Name</span>
+              <input id="pool-name" type="text" placeholder="z.B. WM 2026 Champion-Tippspiel" />
+            </label>
+            <label><span data-i18n="pools.poolType">Typ</span>
+              <select id="pool-type">
+                <option value="pnl" data-i18n="pools.typePnl">P&amp;L-Race</option>
+                <option value="bracket" data-i18n="pools.typeBracket">Bracket-Tippspiel</option>
+                <option value="ctp" data-i18n="pools.typeCtp">Closest-to-Pin</option>
+              </select>
+            </label>
+            <label><span data-i18n="pools.buyIn">Buy-in</span>
+              <span class="stake-input"><span class="cur">€</span><input id="pool-buyin" type="number" min="1" value="20" step="1" style="min-width: 70px" /></span>
+            </label>
+            <label><span data-i18n="pools.endsAt">Ende</span>
+              <input id="pool-ends" type="date" />
+            </label>
+            <button id="pool-create-btn" class="primary" type="button" data-i18n="pools.createButton">Pool erstellen</button>
+          </div>
+        </div>
+
+        <div id="pools-list" class="friends-block"></div>
+      </section>
+
       <section class="card wide reveal" id="wallet-card" data-tab="bets">
         <h3 data-i18n="wallet.section">Mein Wettverlauf</h3>
         <p class="muted small" data-i18n="wallet.intro">Klicke in einem Match-Panel auf eine Quote, um sie zum Slip rechts hinzuzufügen. Wetten werden lokal gespeichert und beim Match-Ende automatisch abgerechnet. Ausschließlich simuliert — kein echtes Geld.</p>
