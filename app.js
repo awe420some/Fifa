@@ -132,6 +132,7 @@ const state = {
   liveAbort: null,              // AbortController for in-flight fetch
   refreshing: false,            // refresh-button spinner gate
   liveOverride: false,          // force live-polling regardless of schedule window
+  liveError: null,              // last /api/live fetch error message (null on success)
   // Single-open explainer slots — one per surface
   expandedTeam: null,
   expandedStage: null,
@@ -1416,6 +1417,29 @@ function trendArrow(code, kind = "title") {
   return `<span class="trend ${cls}">${sign} ${(Math.abs(delta) * 100).toFixed(1)} pp</span>`;
 }
 
+// Contract from api/live.js normaliseFootballDataMatch — single source of
+// truth for the lowercase enum the front-end checks against.
+const LIVE_STATUS_ACTIVE = "live";
+
+function hasActiveLiveMatch(live) {
+  return live?.status === "ok" && live?.matches?.some?.((m) => m.status === LIVE_STATUS_ACTIVE);
+}
+
+// Returns [i18nKey, isActiveBadge]. Order encodes precedence explicitly.
+function liveBannerState() {
+  const live = state.live;
+  const noSource = live?.status === "no-source";
+  if (state.liveOverride && state.liveError) return ["liveErrorOverride", false];
+  if (state.liveOverride && noSource)         return ["liveOverrideNoSource", false];
+  if (noSource)                                return ["liveNoSource", false];
+  // Only trust "live matches" while we're actually polling — otherwise a
+  // stale state.live from a previous override session can falsely badge.
+  if (state.livePolling && hasActiveLiveMatch(live)) return ["liveActive", true];
+  if (state.livePolling)                              return ["livePolling", true];
+  if (liveWindowActive())                             return ["liveActive", true];
+  return ["liveIdle", false];
+}
+
 function renderFreshnessBanner() {
   const dict = t();
   const banner = $("#freshness-banner");
@@ -1433,29 +1457,12 @@ function renderFreshnessBanner() {
   const refreshLabel = state.refreshing ? (fb.refreshing || "Refreshing…") : (fb.refreshBtn || "Refresh now");
   const btn = $("#fb-refresh");
   if (btn) { btn.textContent = refreshLabel; btn.classList.toggle("spinning", !!state.refreshing); }
-  // Live status sub-line
+  // Live status sub-line — derived state → (i18nKey, isActiveBadge)
   const liveStatusEl = $("#fb-live-status");
   if (liveStatusEl) {
-    let txt = "";
-    let cls = "";
-    if (state.liveOverride && state.live?.status === "no-source") {
-      txt = fb.liveOverrideNoSource || "Live-Mode forced (no source yet — set LIVE_PROVIDER + LIVE_API_KEY in Vercel)";
-    } else if (state.live?.status === "no-source") {
-      txt = fb.liveNoSource || "Live-Mode pending — no source configured yet";
-    } else if (state.live?.status === "ok" && state.live?.matches?.some?.((m) => m.status === "live")) {
-      txt = fb.liveActive || "Live · matches in progress";
-      cls = "active";
-    } else if (state.livePolling) {
-      txt = fb.livePolling || "Polling /api/live · waiting for kickoff";
-      cls = "active";
-    } else if (liveWindowActive()) {
-      txt = fb.liveActive || "Live";
-      cls = "active";
-    } else {
-      txt = fb.liveIdle || "";
-    }
-    liveStatusEl.textContent = txt;
-    liveStatusEl.classList.toggle("active", cls === "active");
+    const [key, active] = liveBannerState();
+    liveStatusEl.textContent = fb[key] || "";
+    liveStatusEl.classList.toggle("active", active);
   }
   // Live-mode toggle button
   const liveBtn = $("#fb-live-toggle");
@@ -1502,11 +1509,12 @@ function wireRefreshButton() {
     renderAll();
     startLivePollingIfActive();
   });
-  // Live-mode override toggle: flip state, persist, restart polling, fetch
-  // an immediate /api/live snapshot so the banner reflects the new state.
+  // Live-mode override toggle. ON → pollLive() reuses state.liveAbort so
+  // rapid ON→OFF→ON clicks chain cleanly via the abort signal. OFF →
+  // abort any in-flight fetch so a late response can't repaint the badge
+  // back to "live" after the user disabled.
   const liveBtn = $("#fb-live-toggle");
-  if (liveBtn && !liveBtn.dataset.wired) {
-    liveBtn.dataset.wired = "1";
+  if (liveBtn) {
     liveBtn.addEventListener("click", async () => {
       state.liveOverride = !state.liveOverride;
       try {
@@ -1514,11 +1522,12 @@ function wireRefreshButton() {
       } catch { /* quota */ }
       startLivePollingIfActive();
       if (state.liveOverride) {
-        // Trigger one immediate fetch so the banner updates right away.
-        const live = await loadLive().catch(() => null);
-        if (live) state.live = live;
+        await pollLive();           // shared abort controller; renders banner
+      } else {
+        if (state.liveAbort) state.liveAbort.abort();
+        state.liveError = null;
+        renderFreshnessBanner();
       }
-      renderFreshnessBanner();
     });
   }
 }
@@ -1550,8 +1559,13 @@ function startLivePollingIfActive() {
 async function pollLive() {
   if (state.liveAbort) state.liveAbort.abort();
   state.liveAbort = new AbortController();
-  const live = await loadLive(state.liveAbort.signal);
-  if (live) state.live = live;
+  try {
+    const live = await loadLive(state.liveAbort.signal);
+    if (live) { state.live = live; state.liveError = null; }
+    else      { state.liveError = "fetch-failed"; }
+  } catch (e) {
+    if (e?.name !== "AbortError") state.liveError = String(e?.message || e);
+  }
   renderFreshnessBanner();
 }
 
