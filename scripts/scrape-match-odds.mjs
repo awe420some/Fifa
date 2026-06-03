@@ -171,7 +171,10 @@ async function main() {
   }
   let schedule;
   try {
-    schedule = JSON.parse(readFileSync(SCHEDULE_PATH, "utf8"));
+    const raw = JSON.parse(readFileSync(SCHEDULE_PATH, "utf8"));
+    // schedule-2026.json is { SCHEDULE_2026: [...], notes: ... }
+    schedule = Array.isArray(raw) ? raw : (raw.SCHEDULE_2026 || raw.schedule || raw.matches);
+    if (!Array.isArray(schedule)) throw new Error("schedule JSON has no array payload");
   } catch (e) {
     console.error("Could not read schedule-2026.json:", e.message);
     process.exit(0);
