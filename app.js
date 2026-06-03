@@ -3201,6 +3201,37 @@ function maybeStartTour() {
   setTimeout(startTour, 600);
 }
 
+/* ─────────── iOS install banner ─────────── */
+//
+// iOS Safari doesn't show a Chrome-style install button — users have to
+// know about Share → "Add to Home Screen". Friends won't discover that
+// on their own. This banner nudges them once, dismissable, never shown
+// again. Only triggers for iOS Safari NOT already in standalone mode.
+
+function isIosSafari() {
+  const ua = navigator.userAgent || "";
+  const isIos = /iPhone|iPad|iPod/.test(ua) && !window.MSStream;
+  const isSafari = /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS|OPiOS/.test(ua);
+  return isIos && isSafari;
+}
+
+function isStandalone() {
+  return (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches)
+    || window.navigator.standalone === true;
+}
+
+function maybeShowIosInstallBanner() {
+  const banner = $("#ios-install-banner");
+  if (!banner) return;
+  try { if (localStorage.getItem("wc26_install_banner_dismissed") === "1") return; } catch {}
+  if (!isIosSafari() || isStandalone()) return;
+  banner.hidden = false;
+  $("#ios-install-dismiss")?.addEventListener("click", () => {
+    banner.hidden = true;
+    try { localStorage.setItem("wc26_install_banner_dismissed", "1"); } catch {}
+  });
+}
+
 /* ─────────── Explainer panels (shared by all aggregate surfaces) ─────────── */
 
 // Renders a 4-block decomposition of a team's title forecast: model
@@ -4153,6 +4184,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     wireNotifications();
     switchTab(state.activeTab);
     maybeStartTour();
+    maybeShowIosInstallBanner();
     // Multiplayer is opt-in via /api/config.js; the call no-ops if the
     // Supabase env vars aren't set and the friends-card stays hidden.
     bootstrapMultiplayer();

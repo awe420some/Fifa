@@ -876,3 +876,80 @@ table tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.02); }
 }
 .tour-buttons .primary:hover { filter: brightness(1.05); }
 .tour-step { margin: 0 0 var(--s-1); letter-spacing: 0.08em; text-transform: uppercase; font-size: 0.72rem; }
+
+/* ─────────── iOS install banner (PR Mobile) ─────────── */
+
+.ios-install-banner {
+  position: fixed; left: 12px; right: 12px; bottom: 12px;
+  z-index: 2100;  /* above the tour overlay (z-2000) */
+  display: flex; align-items: center; gap: var(--s-3);
+  background: rgba(10, 22, 32, 0.95);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-lg);
+  padding: var(--s-3) var(--s-4);
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(12px);
+  color: var(--ink); font-size: 0.92rem;
+}
+.ios-install-icon { font-size: 1.3rem; }
+.ios-install-text { flex: 1; line-height: 1.4; }
+#ios-install-dismiss {
+  background: none; border: 0; color: var(--muted);
+  font-size: 1.4rem; cursor: pointer; padding: 0 var(--s-2); line-height: 1;
+}
+#ios-install-dismiss:hover { color: var(--ink); }
+
+/* ─────────── Mobile polish (PR Mobile) ─────────── */
+
+@media (max-width: 720px) {
+  /* Container hugs the edges so cards have more room */
+  .container { padding: var(--s-4) var(--s-3) var(--s-7); }
+  .card { padding: var(--s-4); }
+
+  /* Tab strip — larger touch targets */
+  .tab-strip {
+    margin: 0 calc(-1 * var(--s-3)) var(--s-4);
+    padding: var(--s-2) var(--s-3);
+  }
+  .tab-link {
+    padding: var(--s-3) var(--s-4);
+    font-size: 0.88rem;
+  }
+
+  /* Tour bubble fits viewport */
+  .tour-bubble { width: calc(100vw - 24px) !important; max-width: 360px; }
+
+  /* Bet slip — bottom drawer with capped height + safe-area inset */
+  .bet-slip {
+    max-height: 75vh;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  #bet-slip-items { max-height: 35vh; }
+
+  /* Sticky first column for the mega tables so scanning by team works */
+  #players-table table thead th:first-child,
+  #players-table table tbody td:first-child {
+    position: sticky; left: 0;
+    background: var(--bg-1);
+    z-index: 1;
+  }
+
+  /* Bigger touch targets for primary buttons */
+  .fb-btn, .copy-btn, .bet-cell {
+    min-height: 40px;
+  }
+
+  /* IOS install banner — sits above bet-slip when both present */
+  .ios-install-banner {
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    left: 8px; right: 8px;
+    font-size: 0.86rem;
+  }
+}
+
+@media (max-width: 520px) {
+  /* Hero gets tight margins */
+  .hero { margin-bottom: var(--s-4); }
+  .hero h1 { font-size: clamp(1.5rem, 7vw, 2.2rem); }
+  .hero .subtitle { font-size: 0.92rem; }
+}
