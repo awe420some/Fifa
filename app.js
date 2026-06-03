@@ -1050,6 +1050,17 @@ function renderMatchPanel(matchNo) {
     : `${escape(stageLabel)} · ${escape(dateStr)}`;
   const koMatchupNote = match.stage !== "group"
     ? `<p class="muted small matchup-prob">${escape(ex.likeliestMatchup || "Most-likely matchup")}: ${escape(teamName(primary.teamA))} – ${escape(teamName(primary.teamB))} <strong>${(primary.matchupProb * 100).toFixed(1)}%</strong></p>` : "";
+  // Live / final score badge, populated once real data flows from /api/live
+  // (the matchNo map joins provider IDs to our internal schedule IDs).
+  const liveMatch = getLiveForSchedule(matchNo);
+  let liveBadge = "";
+  if (liveMatch && (liveMatch.scoreA != null && liveMatch.scoreB != null)) {
+    if (liveMatch.status === "live") {
+      liveBadge = `<p class="live-line"><span class="live-badge">● ${escape(ex.live || "LIVE")}${liveMatch.minute ? " " + liveMatch.minute + "'" : ""}</span><span class="live-score">${liveMatch.scoreA}–${liveMatch.scoreB}</span></p>`;
+    } else if (liveMatch.status === "finished") {
+      liveBadge = `<p class="live-line"><span class="final-badge">${escape(ex.fulltime || "FT")}</span><span class="live-score">${liveMatch.scoreA}–${liveMatch.scoreB}</span></p>`;
+    }
+  }
   // Outcome block
   const outcomeBlock = `
     <div class="detail-block">
@@ -1107,6 +1118,7 @@ function renderMatchPanel(matchNo) {
     </div>`;
   return `
     <h4 style="margin:0 0 8px">${headerPrefix}</h4>
+    ${liveBadge}
     ${koMatchupNote}
     <div class="detail-grid">
       ${outcomeBlock}
@@ -2540,6 +2552,12 @@ function fireConfetti() {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
+  // Register the PWA service worker so the app is installable + works
+  // offline. Fail-safe: any error (private mode, SW disabled) is swallowed
+  // and the app runs normally as a plain page.
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("./service-worker.js").catch(() => {});
+  }
   applyI18n();
   $$(".lang-btn").forEach((b) => b.addEventListener("click", () => {
     state.locale = b.dataset.lang;
