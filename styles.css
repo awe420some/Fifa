@@ -830,3 +830,11 @@ table tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.02); }
   transition: background var(--t-fast);
 }
 .pay-link:hover { background: rgba(0, 217, 126, 0.20); }
+
+/* Notifications toggle (PR F) */
+.notify-row { display: flex; gap: var(--s-3); align-items: center; margin: var(--s-3) 0; }
+#notify-toggle.active {
+  background: rgba(0, 217, 126, 0.15);
+  border-color: rgba(0, 217, 126, 0.50);
+  color: var(--accent);
+}

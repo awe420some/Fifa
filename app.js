@@ -166,6 +166,11 @@ const state = {
   betHistory: [],               // placed bets — see settleFinishedBets()
   betStake: 10,
   betSlipCollapsed: false,
+  // Push notifications (PR F)
+  notifyEnabled: false,         // user opted in
+  notifiedKickoffs: new Set(),  // matchNo's we've already pre-kickoff-pinged
+  notifiedSettled: new Set(),   // bet IDs we've already settle-pinged
+  notifiedFriendBets: new Set(),
   // Single-open explainer slots — one per surface
   expandedTeam: null,
   expandedStage: null,
@@ -1811,7 +1816,142 @@ async function pollLive() {
     if (e?.name !== "AbortError") state.liveError = String(e?.message || e);
   }
   settleFinishedBets();
+  notifyForOwnSettledBets();
+  notifyForKickoffSoon();
   renderFreshnessBanner();
+}
+
+/* ─────────── Local notifications (PR F) ─────────── */
+//
+// In-app notifications via the Web Notifications API. Three triggers:
+//  - own bet settled (won/lost/void)
+//  - room friend's bet settled (via Supabase realtime callback)
+//  - match starting in ≤ 15 min (own preferred teams not required)
+//
+// True background push (delivered when tab closed) needs VAPID + a server
+// endpoint to send push messages and a SW push handler. That's a bigger
+// lift; this PR ships local notifications which fire whenever the app
+// is open OR the installed PWA is running, which covers the typical
+// friend-watching-the-match use case.
+
+function notifyAvailable() {
+  return typeof Notification !== "undefined";
+}
+
+async function requestNotifyPermission() {
+  if (!notifyAvailable()) return false;
+  if (Notification.permission === "granted") { state.notifyEnabled = true; return true; }
+  if (Notification.permission === "denied") return false;
+  const result = await Notification.requestPermission().catch(() => "default");
+  state.notifyEnabled = result === "granted";
+  try { localStorage.setItem("wc26_notify_enabled", state.notifyEnabled ? "1" : "0"); } catch {}
+  return state.notifyEnabled;
+}
+
+function notify(title, body, tag) {
+  if (!notifyAvailable() || !state.notifyEnabled) return;
+  if (Notification.permission !== "granted") return;
+  try {
+    new Notification(title, {
+      body,
+      tag: tag || undefined,
+      icon: "/icon-192.png",
+      badge: "/icon-192.png",
+    });
+  } catch { /* some browsers throw if rate-limited */ }
+}
+
+function notifyForOwnSettledBets() {
+  if (!state.notifyEnabled) return;
+  for (const b of state.betHistory) {
+    if (b.status === "open") continue;
+    if (state.notifiedSettled.has(b.id)) continue;
+    const label = b.items?.map((i) => i.label).filter(Boolean).slice(0, 1).join(" · ") || "Combo";
+    const heading = b.status === "won"  ? `Wette gewonnen · +€${((b.payout || 0) - b.stake).toFixed(2)}`
+                  : b.status === "lost" ? `Wette verloren · −€${b.stake.toFixed(2)}`
+                  : "Wette storniert";
+    notify(heading, label, `bet-${b.id}`);
+    state.notifiedSettled.add(b.id);
+  }
+}
+
+function notifyForKickoffSoon() {
+  if (!state.notifyEnabled || !state.schedule) return;
+  const now = Date.now();
+  for (const m of state.schedule) {
+    if (!m.kickoffUTC) continue;
+    if (state.notifiedKickoffs.has(m.matchNo)) continue;
+    const k = new Date(m.kickoffUTC).getTime();
+    const mins = (k - now) / 60_000;
+    if (mins > 0 && mins <= 15) {
+      const teamA = teamName(m.teamA) || m.teamA;
+      const teamB = teamName(m.teamB) || m.teamB;
+      notify(`Anpfiff in ${Math.round(mins)} Min`, `${teamA} vs ${teamB}`, `kickoff-${m.matchNo}`);
+      state.notifiedKickoffs.add(m.matchNo);
+    }
+  }
+}
+
+function notifyFriendBetSettled(bet) {
+  if (!state.notifyEnabled) return;
+  if (!bet || bet.status === "open") return;
+  if (bet.user_id === state.supabaseUser?.id) return;  // own bets handled separately
+  if (state.notifiedFriendBets.has(bet.id)) return;
+  const nick = state.roomMembers.find((m) => m.user_id === bet.user_id)?.nickname || "Friend";
+  const result = bet.status === "won" ? "gewinnt" : bet.status === "lost" ? "verliert" : "void";
+  const label = bet.items?.[0]?.label || "Combo";
+  notify(`${nick} ${result}`, label, `friend-bet-${bet.id}`);
+  state.notifiedFriendBets.add(bet.id);
+}
+
+function wireNotifications() {
+  const btn = $("#notify-toggle");
+  if (!btn || btn.dataset.wired) return;
+  btn.dataset.wired = "1";
+  // Restore enabled flag (but verify with current Permission state).
+  try {
+    if (localStorage.getItem("wc26_notify_enabled") === "1"
+        && notifyAvailable()
+        && Notification.permission === "granted") {
+      state.notifyEnabled = true;
+    }
+  } catch {}
+  renderNotifyToggle();
+  btn.addEventListener("click", async () => {
+    if (state.notifyEnabled) {
+      state.notifyEnabled = false;
+      try { localStorage.setItem("wc26_notify_enabled", "0"); } catch {}
+    } else {
+      await requestNotifyPermission();
+    }
+    renderNotifyToggle();
+  });
+}
+
+function renderNotifyToggle() {
+  const btn = $("#notify-toggle");
+  const status = $("#notify-status");
+  if (!btn) return;
+  const dict = t().notify || {};
+  if (!notifyAvailable()) {
+    btn.hidden = true;
+    if (status) status.textContent = dict.unsupported || "Notifications unsupported in this browser.";
+    return;
+  }
+  if (Notification.permission === "denied") {
+    btn.disabled = true;
+    btn.textContent = dict.denied || "Notifications blockiert (Browser-Einstellung)";
+    if (status) status.textContent = "";
+    return;
+  }
+  btn.disabled = false;
+  btn.textContent = state.notifyEnabled
+    ? (dict.disable || "Notifications aus")
+    : (dict.enable || "Notifications an");
+  btn.classList.toggle("active", state.notifyEnabled);
+  if (status) status.textContent = state.notifyEnabled
+    ? (dict.enabledHint || "Du wirst bei Anpfiff (≤15 Min), eigenen Settlements und Friend-Wetten gepingt.")
+    : "";
 }
 
 /* ─────────── Bet simulator ─────────── */
@@ -2233,7 +2373,12 @@ function subscribeRoomRealtime() {
   const ch = state.supabase.channel(`room:${roomId}`)
     .on("postgres_changes",
       { event: "*", schema: "public", table: "bets", filter: `room_id=eq.${roomId}` },
-      () => loadRoomData().then(renderFriends))
+      (payload) => {
+        // Notify on friend-bet settlement (status changed from open).
+        const newRow = payload?.new;
+        if (newRow && newRow.status && newRow.status !== "open") notifyFriendBetSettled(newRow);
+        loadRoomData().then(renderFriends);
+      })
     .on("postgres_changes",
       { event: "*", schema: "public", table: "room_members", filter: `room_id=eq.${roomId}` },
       () => loadRoomData().then(renderFriends))
@@ -3703,6 +3848,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     wireFriends();
     wirePools();
     wireTabs();
+    wireNotifications();
     switchTab(state.activeTab);
     // Multiplayer is opt-in via /api/config.js; the call no-ops if the
     // Supabase env vars aren't set and the friends-card stays hidden.

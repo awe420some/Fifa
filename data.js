@@ -541,6 +541,13 @@ export const I18N = {
       noSupabase: "Multiplayer is not configured for this deployment (NEXT_PUBLIC_SUPABASE_URL not set).",
       promptNickname: "Set a nickname before creating or joining a room.",
     },
+    notify: {
+      enable: "Enable notifications",
+      disable: "Disable notifications",
+      denied: "Notifications blocked (change in browser settings)",
+      unsupported: "Notifications not supported in this browser.",
+      enabledHint: "You'll get pinged on kickoff (≤15 min), your own bet settlements, and friend bets in your room.",
+    },
     wallet: {
       section: "My bet history",
       intro: "Click any odds cell inside a match panel to add it to the slip on the right. Bets are stored locally and auto-settle when the match ends. All simulated — no real money.",
@@ -810,6 +817,13 @@ export const I18N = {
       noBets: "Noch keine Wetten platziert.",
       noSupabase: "Multiplayer ist für dieses Deployment nicht konfiguriert (NEXT_PUBLIC_SUPABASE_URL fehlt).",
       promptNickname: "Bitte erst einen Spitznamen setzen.",
+    },
+    notify: {
+      enable: "Notifications einschalten",
+      disable: "Notifications ausschalten",
+      denied: "Notifications blockiert (Browser-Einstellung ändern)",
+      unsupported: "Notifications werden in diesem Browser nicht unterstützt.",
+      enabledHint: "Du wirst bei Anpfiff (≤15 Min), eigenen Settlements und Friend-Wetten gepingt.",
     },
     wallet: {
       section: "Mein Wettverlauf",
