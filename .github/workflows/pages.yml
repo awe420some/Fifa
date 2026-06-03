@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - claude/world-cup-decoder-app-RQCPt
   workflow_dispatch:
 
 permissions:

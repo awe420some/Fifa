@@ -587,3 +587,21 @@ footer.foot {
   border-color: rgba(0, 217, 126, 0.5);
   color: var(--accent-2, #00d97e);
 }
+
+/* Live / final score badge inside the per-match detail panel */
+.live-line { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; }
+.live-badge {
+  color: #ff5252;
+  font-weight: 700;
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+  animation: live-pulse 1.4s ease-in-out infinite;
+}
+.final-badge {
+  color: var(--muted);
+  font-weight: 700;
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+}
+.live-score { font-weight: 800; font-size: 1.15rem; }
+@keyframes live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
