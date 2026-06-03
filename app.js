@@ -158,6 +158,7 @@ const state = {
   // Real-money pools (PR C)
   pools: [],                // active pools in the current room
   poolMembers: {},          // pool_id → [members]
+  poolPredictions: {},      // pool_id → [predictions]
   paymentHandles: {},       // own handles row
   roomHandles: {},          // user_id → handles row (for "pay to" links)
   // Bet simulator
@@ -1818,6 +1819,7 @@ async function pollLive() {
   settleFinishedBets();
   notifyForOwnSettledBets();
   notifyForKickoffSoon();
+  settleFinishedPoolPredictions().catch(() => {});
   renderFreshnessBanner();
 }
 
@@ -2654,6 +2656,13 @@ async function loadActivePools() {
       .from("payment_handles").select().in("user_id", memberIds);
     state.roomHandles = (handles || []).reduce((acc, h) => { acc[h.user_id] = h; return acc; }, {});
   }
+  // Also pull all predictions for these pools so the picks-UI can render
+  // current values without one query per pool.
+  const { data: preds } = await state.supabase
+    .from("pool_predictions").select().in("pool_id", ids);
+  const predsByPool = {};
+  for (const p of (preds || [])) (predsByPool[p.pool_id] ||= []).push(p);
+  state.poolPredictions = predsByPool;
 }
 
 async function createPool(args) {
@@ -2749,6 +2758,125 @@ async function settlePool(pool) {
   return true;
 }
 
+// ─────────── Pool prediction scoring ───────────
+//
+// Closest-to-Pin: 5 pts exact score, 3 pts correct outcome + total, 1 pt
+// correct outcome, 0 wrong. Champion (bracket): 1 pt if your pick lifts
+// the trophy, 0 otherwise. group_first is left as future work — needs
+// computing group standings from match results, which the existing MC
+// already does but not exposed in a settle-friendly shape.
+
+function scoreCtp(predicted, actual) {
+  const pa = Number(predicted?.scoreA), pb = Number(predicted?.scoreB);
+  const aa = Number(actual?.scoreA),    ab = Number(actual?.scoreB);
+  if (![pa, pb, aa, ab].every(Number.isFinite)) return 0;
+  if (pa === aa && pb === ab) return 5;
+  const po = pa > pb ? "H" : pa < pb ? "A" : "D";
+  const ao = aa > ab ? "H" : aa < ab ? "A" : "D";
+  if (po !== ao) return 0;
+  if (pa + pb === aa + ab) return 3;
+  return 1;
+}
+
+function scoreChampion(predicted, finalMatch) {
+  if (!finalMatch || finalMatch.status !== "finished") return null;
+  const winner = finalMatch.scoreA > finalMatch.scoreB ? finalMatch.teamA
+               : finalMatch.scoreA < finalMatch.scoreB ? finalMatch.teamB
+               : null;  // shouldn't happen — KO resolves via ET+pens
+  return predicted?.team === winner ? 1 : 0;
+}
+
+// Walk every finished live match, evaluate matching pool_predictions
+// whose settled_at is still null, persist the points, then recompute
+// each affected pool's member-score from the sum of their predictions.
+async function settleFinishedPoolPredictions() {
+  if (!state.supabase || !state.supabaseUser || !state.activeRoom) return;
+  if (!state.live?.matches || !state.liveScheduleMap) return;
+  // Find all finished matches with scores.
+  const finishedByInternal = new Map();  // internalMatchNo → live match obj
+  for (const m of state.live.matches) {
+    if (m.status !== "finished" || m.scoreA == null || m.scoreB == null) continue;
+    // Reverse-lookup internal matchNo from the provider→internal map.
+    for (const [providerNo, internalNo] of state.liveScheduleMap) {
+      if (providerNo === m.matchNo) { finishedByInternal.set(internalNo, m); break; }
+    }
+  }
+  if (!finishedByInternal.size) return;
+  // Get pending predictions for matches in finishedByInternal (CTP) plus
+  // any champion predictions if the final (matchNo 104) is finished.
+  const finalMatch = finishedByInternal.get(104);
+  const matchNos = Array.from(finishedByInternal.keys());
+  const { data: pending } = await state.supabase
+    .from("pool_predictions")
+    .select()
+    .is("settled_at", null)
+    .or(matchNos.length ? `match_no.in.(${matchNos.join(",")})` : "match_no.is.null");
+  if (!Array.isArray(pending) || !pending.length) return;
+  const affectedPoolIds = new Set();
+  for (const pred of pending) {
+    let pts = null;
+    if (pred.pred_type === "match_score" && pred.match_no != null) {
+      const live = finishedByInternal.get(pred.match_no);
+      if (live) pts = scoreCtp(pred.prediction, live);
+    } else if (pred.pred_type === "champion" && finalMatch) {
+      pts = scoreChampion(pred.prediction, finalMatch);
+    }
+    if (pts != null) {
+      await state.supabase.from("pool_predictions").update({
+        points: pts,
+        settled_at: new Date().toISOString(),
+      }).match({ id: pred.id });
+      affectedPoolIds.add(pred.pool_id);
+    }
+  }
+  // Recompute pool_members.score for each touched pool.
+  for (const poolId of affectedPoolIds) {
+    const { data: preds } = await state.supabase
+      .from("pool_predictions").select("user_id, points").eq("pool_id", poolId);
+    const byUser = new Map();
+    for (const p of (preds || [])) byUser.set(p.user_id, (byUser.get(p.user_id) || 0) + (Number(p.points) || 0));
+    for (const [uid, total] of byUser) {
+      await state.supabase.from("pool_members").update({ score: total })
+        .match({ pool_id: poolId, user_id: uid });
+    }
+  }
+  await loadActivePools();
+  renderPools();
+}
+
+// ─────────── Pool predictions: create / load ───────────
+
+async function loadPoolPredictions(poolId) {
+  if (!state.supabase || !state.supabaseUser) return [];
+  const { data } = await state.supabase
+    .from("pool_predictions").select().eq("pool_id", poolId);
+  return Array.isArray(data) ? data : [];
+}
+
+async function setChampionPick(poolId, teamCode) {
+  if (!state.supabase || !state.supabaseUser || !teamCode) return false;
+  const { error } = await state.supabase.from("pool_predictions").upsert({
+    pool_id: poolId,
+    user_id: state.supabaseUser.id,
+    pred_type: "champion",
+    match_no: 104,
+    prediction: { team: teamCode },
+  }, { onConflict: "pool_id,user_id,pred_type,match_no" });
+  return !error;
+}
+
+async function setMatchScorePick(poolId, matchNo, scoreA, scoreB) {
+  if (!state.supabase || !state.supabaseUser) return false;
+  const { error } = await state.supabase.from("pool_predictions").upsert({
+    pool_id: poolId,
+    user_id: state.supabaseUser.id,
+    pred_type: "match_score",
+    match_no: matchNo,
+    prediction: { scoreA: Number(scoreA), scoreB: Number(scoreB) },
+  }, { onConflict: "pool_id,user_id,pred_type,match_no" });
+  return !error;
+}
+
 function renderPools() {
   const dict = t();
   const p = dict.pools || {};
@@ -2834,6 +2962,53 @@ function renderPools() {
       const joinBtn = !inPool
         ? `<button class="primary" data-pool-join="${pool.id}" type="button">Join</button>`
         : "";
+      // Picks UI — only when this user is a member of the pool.
+      let picksBlock = "";
+      if (inPool && pool.status === "open") {
+        const myPreds = (state.poolPredictions?.[pool.id] || []).filter((x) => x.user_id === state.supabaseUser.id);
+        if (pool.pool_type === "bracket") {
+          const myChamp = myPreds.find((x) => x.pred_type === "champion");
+          const teamOpts = state.schedule
+            ? Array.from(new Set(state.schedule.filter((m) => m.stage === "group" && m.teamA && m.teamB).flatMap((m) => [m.teamA, m.teamB]))).sort()
+            : [];
+          picksBlock = `<div class="pool-picks">
+            <h5>${escape(p.pickChampionHeader || "Your champion pick")}</h5>
+            <div class="friends-row">
+              <select data-pool-champion="${pool.id}">
+                <option value="">— ${escape(p.pickChampionPrompt || "pick a team")} —</option>
+                ${teamOpts.map((c) => `<option value="${c}" ${myChamp?.prediction?.team === c ? "selected" : ""}>${escape(teamName(c) || c)}</option>`).join("")}
+              </select>
+              <span class="muted small">${escape(p.pickChampionHint || "Worth 1 point if your team lifts the trophy.")}</span>
+            </div>
+          </div>`;
+        } else if (pool.pool_type === "ctp") {
+          // Show matches inside [starts_at, ends_at] (limit to next 6 unseeded).
+          const start = new Date(pool.starts_at).getTime();
+          const end = new Date(pool.ends_at).getTime();
+          const elig = (state.schedule || [])
+            .filter((m) => m.kickoffUTC && m.teamA && m.teamB)
+            .filter((m) => { const k = new Date(m.kickoffUTC).getTime(); return k >= start && k <= end; })
+            .slice(0, 6);
+          const rows = elig.map((m) => {
+            const mine = myPreds.find((x) => x.pred_type === "match_score" && x.match_no === m.matchNo);
+            const date = (m.kickoffUTC || "").slice(5, 10);
+            return `<div class="ctp-row" data-ctp-match="${m.matchNo}" data-ctp-pool="${pool.id}">
+              <span class="muted small">${date}</span>
+              <span>${escape(teamName(m.teamA))} – ${escape(teamName(m.teamB))}</span>
+              <input class="ctp-score-a" type="number" min="0" max="9" value="${mine?.prediction?.scoreA ?? ""}" placeholder="0" />
+              <span>:</span>
+              <input class="ctp-score-b" type="number" min="0" max="9" value="${mine?.prediction?.scoreB ?? ""}" placeholder="0" />
+              <button class="copy-btn ctp-save" type="button">${escape(p.pickScoreSave || "Save")}</button>
+              ${mine?.settled_at ? `<span class="${mine.points > 0 ? "edge-pos" : "muted"}">${escape(p.pickScorePoints || "pts")}: ${mine.points}</span>` : ""}
+            </div>`;
+          }).join("");
+          picksBlock = `<div class="pool-picks">
+            <h5>${escape(p.pickScoreHeader || "Your score predictions")}</h5>
+            <p class="muted small">${escape(p.pickScoreHint || "5 pts exact · 3 pts outcome + total · 1 pt outcome.")}</p>
+            ${rows || `<p class="muted small">${escape(p.pickScoreNone || "No matches in this pool window.")}</p>`}
+          </div>`;
+        }
+      }
       return `<div class="pool-card">
         <header>
           <h4>${escape(pool.name)} <span class="muted small">· ${escape(typeLbl)}</span></h4>
@@ -2842,6 +3017,7 @@ function renderPools() {
         <p class="muted small">${escape(p.buyIn || "Buy-in")}: <b>€${Number(pool.buy_in).toFixed(2)}</b> · ${escape(p.potTotal || "Pot")}: <b>€${Number(pool.pot_total).toFixed(2)}</b> · ${escape(p.endsAt || "Ends")}: ${new Date(pool.ends_at).toISOString().slice(0, 10)}</p>
         ${winnerLine}
         ${membersTable}
+        ${picksBlock}
         <div class="pool-actions">${joinBtn} ${meActions} ${settleBtn} ${deleteBtn}</div>
       </div>`;
     }).join("");
@@ -2897,7 +3073,132 @@ function wirePools() {
     }
     const iban = e.target.closest("[data-copy-iban]");
     if (iban) { try { await navigator.clipboard.writeText(iban.dataset.copyIban); } catch {} return; }
+    // CTP save button — reads sibling inputs in the same .ctp-row
+    const ctpSave = e.target.closest(".ctp-save");
+    if (ctpSave) {
+      const row = ctpSave.closest(".ctp-row");
+      if (!row) return;
+      const poolId = row.dataset.ctpPool;
+      const matchNo = Number(row.dataset.ctpMatch);
+      const a = Number(row.querySelector(".ctp-score-a")?.value);
+      const b = Number(row.querySelector(".ctp-score-b")?.value);
+      if (!Number.isFinite(a) || !Number.isFinite(b)) return;
+      await setMatchScorePick(poolId, matchNo, a, b);
+      await loadActivePools(); renderPools();
+      return;
+    }
   });
+  // Champion-dropdown change → save immediately (no separate button)
+  card.addEventListener("change", async (e) => {
+    const champ = e.target.closest("[data-pool-champion]");
+    if (champ) {
+      const poolId = champ.dataset.poolChampion;
+      const team = champ.value;
+      if (team) { await setChampionPick(poolId, team); await loadActivePools(); renderPools(); }
+    }
+  });
+}
+
+/* ─────────── Onboarding tour ─────────── */
+//
+// 7-step welcome tour for friends arriving for the first time. Auto-switches
+// tabs as needed when the highlighted target lives in a different tab.
+// Persisted via wc26_tour_done so it shows exactly once; the Methodology tab
+// has a "Restart tour" button so it can be re-run any time.
+
+const TOUR_STEPS = [
+  { tab: "overview",    target: null,                       i18n: "step1" },
+  { tab: "overview",    target: ".tab-strip",               i18n: "step2" },
+  { tab: "overview",    target: "#top3",                    i18n: "step3" },
+  { tab: "schedule",    target: "#schedule-list",           i18n: "step4" },
+  { tab: "bets",        target: "#wallet-card",             i18n: "step5" },
+  { tab: "bets",        target: "#bet-slip",                i18n: "step6" },
+  { tab: "methodology", target: "#tour-restart",            i18n: "step7" },
+];
+
+let tourIndex = 0;
+
+function startTour() {
+  tourIndex = 0;
+  const ov = $("#tour-overlay");
+  if (ov) ov.hidden = false;
+  renderTourStep();
+}
+
+function endTour() {
+  const ov = $("#tour-overlay");
+  if (ov) ov.hidden = true;
+  try { localStorage.setItem("wc26_tour_done", "1"); } catch {}
+}
+
+function renderTourStep() {
+  const dict = t().tour || {};
+  const step = TOUR_STEPS[tourIndex];
+  if (!step) { endTour(); return; }
+  // Auto-switch tab if needed.
+  if (step.tab && step.tab !== state.activeTab) switchTab(step.tab);
+  $("#tour-step-counter").textContent = `${tourIndex + 1} / ${TOUR_STEPS.length}`;
+  const stepI18n = dict[step.i18n] || {};
+  $("#tour-title").textContent = stepI18n.title || step.i18n;
+  $("#tour-body").textContent  = stepI18n.body  || "";
+  $("#tour-prev").style.visibility = tourIndex === 0 ? "hidden" : "visible";
+  $("#tour-next").textContent = tourIndex === TOUR_STEPS.length - 1 ? (dict.done || "Fertig") : (dict.next || "Weiter");
+  // Position spotlight + bubble. Defer one frame so any auto-switched tab
+  // has rendered its sections.
+  requestAnimationFrame(() => {
+    const spot = $("#tour-spotlight");
+    const bubble = $("#tour-bubble");
+    if (!spot || !bubble) return;
+    const target = step.target ? document.querySelector(step.target) : null;
+    if (target) {
+      const r = target.getBoundingClientRect();
+      // Pad the spotlight slightly so the highlight reads.
+      const pad = 8;
+      spot.style.cssText =
+        `display:block;` +
+        `top:${r.top - pad + window.scrollY}px;` +
+        `left:${r.left - pad + window.scrollX}px;` +
+        `width:${r.width + pad * 2}px;` +
+        `height:${r.height + pad * 2}px;`;
+      // Bubble preferentially below the target, fallback above.
+      const bw = 360, bh = 180;
+      const fitsBelow = r.bottom + bh + 24 < window.innerHeight;
+      const top = fitsBelow ? r.bottom + 12 + window.scrollY : Math.max(12 + window.scrollY, r.top - bh - 12 + window.scrollY);
+      const left = Math.max(12, Math.min(window.innerWidth - bw - 12, r.left + r.width / 2 - bw / 2)) + window.scrollX;
+      bubble.style.cssText = `display:block; top:${top}px; left:${left}px; width:${bw}px;`;
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+    } else {
+      // Centered intro / no target.
+      spot.style.display = "none";
+      const bw = 420;
+      const top = Math.max(80, window.innerHeight / 2 - 100) + window.scrollY;
+      const left = Math.max(12, window.innerWidth / 2 - bw / 2) + window.scrollX;
+      bubble.style.cssText = `display:block; top:${top}px; left:${left}px; width:${bw}px;`;
+    }
+  });
+}
+
+function wireTour() {
+  const ov = $("#tour-overlay");
+  if (!ov || ov.dataset.wired) return;
+  ov.dataset.wired = "1";
+  $("#tour-prev")?.addEventListener("click", () => { if (tourIndex > 0) { tourIndex--; renderTourStep(); } });
+  $("#tour-next")?.addEventListener("click", () => {
+    if (tourIndex >= TOUR_STEPS.length - 1) endTour();
+    else { tourIndex++; renderTourStep(); }
+  });
+  $("#tour-skip")?.addEventListener("click", endTour);
+  $("#tour-restart")?.addEventListener("click", startTour);
+  // Re-position on resize so the spotlight tracks responsive shifts.
+  window.addEventListener("resize", () => { if (!ov.hidden) renderTourStep(); });
+}
+
+function maybeStartTour() {
+  let done = false;
+  try { done = localStorage.getItem("wc26_tour_done") === "1"; } catch {}
+  if (done) return;
+  // Wait a beat so the dashboard is fully painted before the overlay shows.
+  setTimeout(startTour, 600);
 }
 
 /* ─────────── Explainer panels (shared by all aggregate surfaces) ─────────── */
@@ -3848,8 +4149,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     wireFriends();
     wirePools();
     wireTabs();
+    wireTour();
     wireNotifications();
     switchTab(state.activeTab);
+    maybeStartTour();
     // Multiplayer is opt-in via /api/config.js; the call no-ops if the
     // Supabase env vars aren't set and the friends-card stays hidden.
     bootstrapMultiplayer();
