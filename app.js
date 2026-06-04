@@ -3251,18 +3251,36 @@ function renderPools() {
       const typeLbl = pool.pool_type === "pnl" ? (p.typePnl || "P&L race")
                      : pool.pool_type === "bracket" ? (p.typeBracket || "Bracket")
                      : (p.typeCtp || "CTP");
+      // Ranking: sort by score desc → rank + crown for the settled winner.
+      const ranked = [...members].sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+      // What each member tipped (visible to everyone — the social hook).
+      const tipFor = (uid) => {
+        const preds = (state.poolPredictions?.[pool.id] || []).filter((x) => x.user_id === uid);
+        if (pool.pool_type === "bracket") {
+          const c = preds.find((x) => x.pred_type === "champion");
+          return c?.prediction?.team ? escape(teamName(c.prediction.team) || c.prediction.team) : "—";
+        }
+        if (pool.pool_type === "ctp") {
+          const n = preds.filter((x) => x.pred_type === "match_score").length;
+          return n ? `${n} ${escape(p.tipsCount || "Tipps")}` : "—";
+        }
+        return "—"; // pnl: no picks — the score column IS their P&L
+      };
       const membersTable = `<table class="wallet-table">
         <thead><tr>
+          <th>#</th>
           <th>${escape(p.colNick || "Nick")}</th>
+          <th>${escape(p.colTip || "Tipp")}</th>
           <th>${escape(p.colStatus || "Status")}</th>
           <th>${escape(p.colScore || "Score")}</th>
           <th>${escape(p.payTo || "Pay to")}</th>
         </tr></thead><tbody>
-        ${members.map((m) => {
+        ${ranked.map((m, i) => {
           const nick = escape(nickFor(m.user_id));
+          const rank = pool.winner_id === m.user_id ? "👑" : `${i + 1}.`;
           const statusCls = m.buy_in_status === "paid" ? "edge-pos" : "muted";
           const statusTxt = m.buy_in_status === "paid"
-            ? `${escape(p.buyInPaid || "Paid")}${m.paid_via ? " · " + m.paid_via : ""}`
+            ? `${escape(p.buyInPaid || "Paid")}${m.paid_via ? " · " + escape(m.paid_via) : ""}`
             : (p.buyInPending || "Pending");
           // Payment links for OTHER members (we pay them, not ourselves).
           const handles = state.roomHandles?.[m.user_id] || {};
@@ -3275,8 +3293,11 @@ function renderPools() {
             handles.revolut && `<a class="pay-link" href="${PAYMENT_LINKS.revolut(pool.buy_in, handles.revolut)}" target="_blank" rel="noopener">Revolut</a>`,
             handles.sepa_iban && `<button class="pay-link" data-copy-iban="${escape(handles.sepa_iban)}" type="button">IBAN</button>`,
           ].filter(Boolean).join(" · ") : "—";
-          return `<tr>
+          const meRow = m.user_id === state.supabaseUser.id ? ' style="background:rgba(127,127,127,.12)"' : "";
+          return `<tr${meRow}>
+            <td>${rank}</td>
             <td><b>${nick}</b></td>
+            <td>${tipFor(m.user_id)}</td>
             <td class="${statusCls}">${statusTxt}</td>
             <td>${Number(m.score || 0).toFixed(2)}</td>
             <td class="small">${payLinks}</td>
