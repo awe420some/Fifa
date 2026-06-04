@@ -2243,9 +2243,16 @@ function wireBetSlip() {
 async function initSupabase() {
   const cfg = (typeof window !== "undefined") ? window.WC26_SUPABASE : null;
   if (!cfg || !cfg.url || !cfg.anonKey) return null;
+  // Defensive normalisation: users sometimes copy the "Data API" URL which
+  // ends in /rest/v1 or has a trailing slash. createClient expects the bare
+  // project host, so strip those tails before passing it through.
+  let url = String(cfg.url).trim();
+  url = url.replace(/\/+$/, "");                    // trailing slashes
+  url = url.replace(/\/rest\/v1$/i, "");            // /rest/v1 suffix
+  url = url.replace(/\/auth\/v1$/i, "");            // /auth/v1 suffix (just in case)
   try {
     const mod = await import("https://esm.sh/@supabase/supabase-js@2");
-    const client = mod.createClient(cfg.url, cfg.anonKey, {
+    const client = mod.createClient(url, cfg.anonKey, {
       auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
     });
     return client;
