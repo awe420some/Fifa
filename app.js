@@ -2707,27 +2707,13 @@ function renderFriends() {
   }
   hide(pendingEl); show(roomEl);
 
-  // 5) Room area.
-  if (state.activeRoom) {
-    hide($("#friends-no-room")); show($("#friends-active-room"));
-    const codeEl = $("#friends-active-code");
-    if (codeEl) codeEl.textContent = state.activeRoom.code;
-    renderRoomRequests(f);
-  } else {
-    show($("#friends-no-room")); hide($("#friends-active-room"));
-  }
+  // 5) One global round — no room-management UI to render.
 
-  // 6) Leaderboard (approved members only).
+  // 6) Leaderboard — everyone in the round.
   if (!lb) return;
-  if (!state.activeRoom) { setNote(lb, f.noMembers || "Create or join a room."); return; }
-  // Am I still pending in this room? Show a notice instead of the board.
-  const myMembership = state.roomMembers.find((m) => m.user_id === state.supabaseUser.id);
-  if (myMembership && myMembership.status === "pending") {
-    setNote(lb, f.roomPending || "Beitritt gesendet — warte auf Freigabe durch den Raum-Owner.");
-    return;
-  }
+  if (!state.activeRoom) { setNote(lb, f.loadingRound || "Wettrunde wird geladen…"); return; }
   const approvedMembers = state.roomMembers.filter((m) => m.status !== "pending");
-  if (!approvedMembers.length) { setNote(lb, f.noMembers || "Waiting for friends."); return; }
+  if (!approvedMembers.length) { setNote(lb, f.noMembers || "Noch keine Mitspieler in der Runde."); return; }
   // Compute per-member aggregates from state.roomBets.
   const byUser = new Map();
   for (const m of approvedMembers) byUser.set(m.user_id, { nick: m.nickname, total: 0, won: 0, lost: 0, open: 0, pl: 0, edgeSum: 0, edgeN: 0, last5: [] });
@@ -2849,39 +2835,20 @@ function wireFriends() {
     else if (btn.dataset.approveRoom) await approveRoomMember(state.activeRoom?.id, btn.dataset.approveRoom);
     else if (btn.dataset.rejectRoom) await rejectRoomMember(state.activeRoom?.id, btn.dataset.rejectRoom);
   });
-  $("#friends-create-room")?.addEventListener("click", async () => {
-    const nick = $("#friends-nickname")?.value?.trim();
-    if (!nick) { alert(t().friends?.promptNickname || "Set a nickname first."); return; }
-    const room = await createRoom(nick);
-    if (room) await activateRoom(room);
-  });
-  $("#friends-join-room")?.addEventListener("click", async () => {
-    const code = $("#friends-room-code")?.value?.trim();
-    const nick = $("#friends-nickname")?.value?.trim();
-    if (!code || !nick) { alert(t().friends?.promptNickname || "Set a nickname and code first."); return; }
-    const room = await joinRoomByCode(code, nick);
-    if (room) await activateRoom(room);
-  });
-  $("#friends-copy-code")?.addEventListener("click", async () => {
-    if (!state.activeRoom) return;
-    try { await navigator.clipboard.writeText(state.activeRoom.code); } catch {}
-  });
-  $("#friends-leave-room")?.addEventListener("click", leaveActiveRoom);
+  // Room create/join/copy/leave handlers removed — one global round, no room management.
 }
 
 // Fallback when localStorage has no active room (new device / cleared cache /
 // after an update): find a room where the user is an approved member and
 // activate the most recent one. The room lives in the DB, not just the browser.
 async function restoreRoomFromDb() {
+  // One global "main round" — load it directly via the is_main flag.
+  // RLS only returns it to app-approved users (auto-joined as approved
+  // members by the DB trigger), so this is also the membership gate.
   if (!state.supabase || !state.supabaseUser) return;
   try {
-    const { data: memberships } = await state.supabase
-      .from("room_members").select("room_id")
-      .eq("user_id", state.supabaseUser.id).eq("status", "approved");
-    const roomIds = (memberships || []).map((m) => m.room_id);
-    if (!roomIds.length) return;
     const { data: rooms } = await state.supabase
-      .from("rooms").select().in("id", roomIds).order("created_at", { ascending: false });
+      .from("rooms").select().eq("is_main", true).limit(1);
     if (rooms?.length) await activateRoom(rooms[0]);
   } catch {}
 }
@@ -2908,14 +2875,6 @@ async function bootstrapMultiplayer() {
     // ran with supabaseUser = null on first paint.
     if (session?.user) {
       if (isAppAdmin()) { await loadPendingApprovals(); subscribeApprovalsRealtime(); renderFriends(); }
-      try {
-        const stored = JSON.parse(localStorage.getItem("wc26_active_room") || "null");
-        if (stored?.id && stored?.code && !state.activeRoom) {
-          state.activeRoom = stored;
-          await loadRoomData();
-          subscribeRoomRealtime();
-        }
-      } catch {}
       if (!state.activeRoom) await restoreRoomFromDb();
       await loadPaymentHandles();
       await loadActivePools();
@@ -2930,16 +2889,7 @@ async function bootstrapMultiplayer() {
   await refreshSupabaseUser();
   await loadProfile();
   if (isAppAdmin()) { await loadPendingApprovals(); subscribeApprovalsRealtime(); }
-  // Restore active room: localStorage first, else fall back to DB membership
-  // (so a device switch / cleared cache / update still finds your room).
-  try {
-    const stored = JSON.parse(localStorage.getItem("wc26_active_room") || "null");
-    if (stored?.id && stored?.code && state.supabaseUser) {
-      state.activeRoom = stored;
-      await loadRoomData();
-      subscribeRoomRealtime();
-    }
-  } catch {}
+  // Load the one global main round (RLS gates it to approved users).
   if (!state.activeRoom && state.supabaseUser) await restoreRoomFromDb();
   renderFriends();
   // Also kick off pools / handles loading and render the pools card.
