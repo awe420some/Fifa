@@ -2916,6 +2916,7 @@ async function bootstrapMultiplayer() {
           subscribeRoomRealtime();
         }
       } catch {}
+      if (!state.activeRoom) await restoreRoomFromDb();
       await loadPaymentHandles();
       await loadActivePools();
       renderPools();
