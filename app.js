@@ -2314,6 +2314,39 @@ async function signInAnonymously() {
   }
 }
 
+// Email + password — classic persistent login. Supabase persists the session
+// in localStorage automatically via persistSession:true so users stay logged
+// in across reloads and devices (when they sign in on each one).
+async function signInWithPassword(email, password) {
+  if (!state.supabase || !email || !password) return { ok: false, error: "missing" };
+  try {
+    const { error } = await state.supabase.auth.signInWithPassword({ email, password });
+    if (error) return { ok: false, error: error.message };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
+async function signUpWithPassword(email, password) {
+  if (!state.supabase || !email || !password) return { ok: false, error: "missing" };
+  if (password.length < 6) return { ok: false, error: "Passwort braucht ≥ 6 Zeichen." };
+  try {
+    const { data, error } = await state.supabase.auth.signUp({ email, password });
+    if (error) return { ok: false, error: error.message };
+    // If email confirmation is disabled in Supabase, signUp returns an
+    // active session immediately and onAuthStateChange fires SIGNED_IN.
+    // If confirmation is ON, data.session is null and the user has to
+    // verify the email first. Surface that explicitly.
+    if (!data?.session) {
+      return { ok: false, error: "Account erstellt — Email bestätigen (oder Email-Confirmation in Supabase ausschalten)." };
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
 async function supabaseSignOut() {
   if (!state.supabase) return;
   await leaveActiveRoom();
@@ -2585,6 +2618,30 @@ function wireFriends() {
   });
   $("#friends-anon-btn")?.addEventListener("click", async () => {
     await signInAnonymously();
+  });
+  // Email + password (primary path)
+  $("#friends-signin-btn")?.addEventListener("click", async () => {
+    const email = $("#friends-email")?.value?.trim();
+    const password = $("#friends-password")?.value || "";
+    if (!email || !password) {
+      const s = $("#friends-login-status"); if (s) s.textContent = t().friends?.pwMissing || "Email + Passwort eintragen.";
+      return;
+    }
+    const r = await signInWithPassword(email, password);
+    if (!r.ok) {
+      const s = $("#friends-login-status"); if (s) s.textContent = r.error || "Login failed.";
+    }
+  });
+  $("#friends-signup-btn")?.addEventListener("click", async () => {
+    const email = $("#friends-email")?.value?.trim();
+    const password = $("#friends-password")?.value || "";
+    if (!email || !password) {
+      const s = $("#friends-login-status"); if (s) s.textContent = t().friends?.pwMissing || "Email + Passwort eintragen.";
+      return;
+    }
+    const r = await signUpWithPassword(email, password);
+    const s = $("#friends-login-status");
+    if (s) s.textContent = r.ok ? (t().friends?.signupOk || "Account erstellt + eingeloggt.") : (r.error || "Sign-up failed.");
   });
   $("#friends-signout")?.addEventListener("click", supabaseSignOut);
   $("#friends-create-room")?.addEventListener("click", async () => {
