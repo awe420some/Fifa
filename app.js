@@ -2291,27 +2291,104 @@ async function sendMagicLink(email) {
   }
 }
 
-// Anonymous sign-in — no email required, no SMTP dependency.
-// Requires "Allow Anonymous Sign-Ins" enabled in Supabase Auth settings.
-// Creates a real auth.users row with a generated UUID; from there the
-// existing room + bets RLS works identically to email-authed users.
-async function signInAnonymously() {
-  if (!state.supabase) return false;
+// Password reset — sends a recovery email. Needs working SMTP (Resend).
+async function sendPasswordReset(email) {
+  if (!state.supabase || !email) return { ok: false, error: "missing" };
   try {
-    const { error } = await state.supabase.auth.signInAnonymously();
-    if (error) {
-      console.warn("Anonymous sign-in failed:", error.message);
-      // Common case: Supabase has Anonymous Sign-Ins disabled. Surface
-      // a hint via the friends-login-status field so the user knows.
-      const status = $("#friends-login-status");
-      if (status) status.textContent = (t().friends?.anonError || "Anonymous sign-in is disabled in Supabase. Toggle it on in Authentication → Sign In / Providers → Anonymous.");
-      return false;
-    }
-    return true;
+    const { error } = await state.supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: location.origin + location.pathname,
+    });
+    if (error) return { ok: false, error: error.message };
+    return { ok: true };
   } catch (e) {
-    console.warn("Anonymous sign-in threw:", e?.message || e);
-    return false;
+    return { ok: false, error: e?.message || String(e) };
   }
+}
+
+// Completes a reset after the PASSWORD_RECOVERY auth event fires: sets a new
+// password on the recovery session, then the user is fully signed in.
+async function completePasswordReset(password) {
+  if (!state.supabase || !password) return { ok: false, error: "missing" };
+  if (password.length < 6) return { ok: false, error: t().friends?.pwTooShort || "Passwort braucht ≥ 6 Zeichen." };
+  try {
+    const { error } = await state.supabase.auth.updateUser({ password });
+    if (error) return { ok: false, error: error.message };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
+// App-level membership profile (app_status, is_admin) for the current user.
+// Drives the approval gate + admin panel visibility.
+async function loadProfile() {
+  state.profile = null;
+  if (!state.supabase || !state.supabaseUser) return;
+  try {
+    const { data } = await state.supabase
+      .from("profiles")
+      .select("app_status,is_admin,display_name,email")
+      .eq("id", state.supabaseUser.id)
+      .maybeSingle();
+    state.profile = data || null;
+  } catch { state.profile = null; }
+}
+
+function isAppApproved() { return state.profile?.app_status === "approved"; }
+function isAppAdmin() { return !!state.profile?.is_admin; }
+
+// ─────────── Membership approvals ───────────
+
+// Admin: pending app-membership requests (only loads for admins).
+async function loadPendingApprovals() {
+  state.pendingApprovals = [];
+  if (!state.supabase || !isAppAdmin()) return;
+  try {
+    const { data } = await state.supabase
+      .from("profiles").select("id,email,display_name,requested_at")
+      .eq("app_status", "pending").order("requested_at", { ascending: true });
+    state.pendingApprovals = Array.isArray(data) ? data : [];
+  } catch { state.pendingApprovals = []; }
+}
+
+// Admin: approve or reject a user for the whole app.
+async function approveAppMember(userId, approved) {
+  if (!state.supabase || !userId) return;
+  await state.supabase.from("profiles")
+    .update({ app_status: approved ? "approved" : "rejected", decided_at: new Date().toISOString(), decided_by: state.supabaseUser?.id })
+    .eq("id", userId);
+  await loadPendingApprovals();
+  renderFriends();
+}
+
+// Room owner: approve a pending join request for the active room.
+async function approveRoomMember(roomId, userId) {
+  if (!state.supabase || !roomId || !userId) return;
+  await state.supabase.from("room_members")
+    .update({ status: "approved" }).eq("room_id", roomId).eq("user_id", userId);
+  await loadRoomData();
+  renderFriends();
+}
+
+// Room owner: reject (remove) a pending join request.
+async function rejectRoomMember(roomId, userId) {
+  if (!state.supabase || !roomId || !userId) return;
+  await state.supabase.from("room_members")
+    .delete().eq("room_id", roomId).eq("user_id", userId);
+  await loadRoomData();
+  renderFriends();
+}
+
+// Admin realtime: re-load pending requests when any profile changes.
+function subscribeApprovalsRealtime() {
+  if (!state.supabase || !isAppAdmin() || state.approvalsChannel) return;
+  state.approvalsChannel = state.supabase
+    .channel("app-approvals")
+    .on("postgres_changes", { event: "*", schema: "public", table: "profiles" }, async () => {
+      await loadPendingApprovals();
+      renderFriends();
+    })
+    .subscribe();
 }
 
 // Email + password — classic persistent login. Supabase persists the session
@@ -2328,18 +2405,21 @@ async function signInWithPassword(email, password) {
   }
 }
 
-async function signUpWithPassword(email, password) {
+async function signUpWithPassword(email, password, displayName) {
   if (!state.supabase || !email || !password) return { ok: false, error: "missing" };
-  if (password.length < 6) return { ok: false, error: "Passwort braucht ≥ 6 Zeichen." };
+  if (password.length < 6) return { ok: false, error: t().friends?.pwTooShort || "Passwort braucht ≥ 6 Zeichen." };
   try {
-    const { data, error } = await state.supabase.auth.signUp({ email, password });
+    const { data, error } = await state.supabase.auth.signUp({
+      email,
+      password,
+      options: { data: displayName ? { display_name: displayName } : {} },
+    });
     if (error) return { ok: false, error: error.message };
-    // If email confirmation is disabled in Supabase, signUp returns an
-    // active session immediately and onAuthStateChange fires SIGNED_IN.
-    // If confirmation is ON, data.session is null and the user has to
-    // verify the email first. Surface that explicitly.
+    // With "Confirm email" OFF, signUp returns an active session immediately
+    // and the DB trigger has created a profiles row with app_status='pending'.
+    // If confirmation is ON, data.session is null → ask them to confirm first.
     if (!data?.session) {
-      return { ok: false, error: "Account erstellt — Email bestätigen (oder Email-Confirmation in Supabase ausschalten)." };
+      return { ok: false, error: t().friends?.confirmHint || "Account erstellt — bitte Email bestätigen." };
     }
     return { ok: true };
   } catch (e) {
@@ -2369,26 +2449,36 @@ function genRoomCode() {
 
 async function createRoom(nickname) {
   if (!state.supabase || !state.supabaseUser || !nickname) return null;
+  if (!isAppApproved()) return null;  // app-level gate
   const code = genRoomCode();
   const { data: room, error: roomErr } = await state.supabase
-    .from("rooms").insert({ code, name: null }).select().single();
+    .from("rooms").insert({ code, name: null, owner_id: state.supabaseUser.id }).select().single();
   if (roomErr || !room) return null;
+  // The owner is an approved member of their own room immediately.
   const { error: memberErr } = await state.supabase
-    .from("room_members").insert({ room_id: room.id, user_id: state.supabaseUser.id, nickname });
+    .from("room_members").insert({ room_id: room.id, user_id: state.supabaseUser.id, nickname, status: "approved" });
   if (memberErr) return null;
   return room;
 }
 
 async function joinRoomByCode(code, nickname) {
   if (!state.supabase || !state.supabaseUser || !nickname || !code) return null;
+  if (!isAppApproved()) return null;  // app-level gate
   const { data: room } = await state.supabase
     .from("rooms").select().eq("code", code.toUpperCase()).maybeSingle();
   if (!room) return null;
-  // upsert membership so re-joining doesn't error
-  await state.supabase
-    .from("room_members")
-    .upsert({ room_id: room.id, user_id: state.supabaseUser.id, nickname }, { onConflict: "room_id,user_id" });
-  return room;
+  // Owner is already an approved member.
+  if (room.owner_id === state.supabaseUser.id) return room;
+  // Don't reset an existing membership's status; only create a pending one.
+  const { data: existing } = await state.supabase
+    .from("room_members").select("status")
+    .eq("room_id", room.id).eq("user_id", state.supabaseUser.id).maybeSingle();
+  if (!existing) {
+    await state.supabase
+      .from("room_members")
+      .insert({ room_id: room.id, user_id: state.supabaseUser.id, nickname, status: "pending" });
+  }
+  return room;  // room-level approval still pending until the owner approves
 }
 
 async function activateRoom(room) {
@@ -2494,6 +2584,69 @@ async function pushSettledBets() {
   }
 }
 
+// Tiny DOM builder — avoids innerHTML with user-supplied content (XSS-safe).
+function makeEl(tag, opts = {}, kids = []) {
+  const n = document.createElement(tag);
+  if (opts.class) n.className = opts.class;
+  if (opts.text != null) n.textContent = opts.text;
+  if (opts.style) n.style.cssText = opts.style;
+  if (opts.type) n.type = opts.type;
+  if (opts.data) for (const [k, v] of Object.entries(opts.data)) n.dataset[k] = v;
+  for (const k of kids) if (k) n.appendChild(k);
+  return n;
+}
+
+// Replace an element's content with a single muted note paragraph.
+function setNote(el, text) {
+  if (el) el.replaceChildren(makeEl("p", { class: "muted small", text }));
+}
+
+// One approve/reject row used by both the admin + room-owner panels.
+function approvalRow(label, sublabel, approveData, rejectData, f) {
+  const left = makeEl("span", { text: label });
+  if (sublabel) left.appendChild(makeEl("span", { class: "muted small", text: " · " + sublabel }));
+  const actions = makeEl("span", { style: "display:flex;gap:6px" }, [
+    makeEl("button", { class: "primary", type: "button", text: f.approve || "Freigeben", data: approveData }),
+    makeEl("button", { class: "copy-btn", type: "button", text: f.reject || "Ablehnen", data: rejectData }),
+  ]);
+  return makeEl("div", { style: "display:flex;justify-content:space-between;align-items:center;gap:8px;padding:4px 0" }, [left, actions]);
+}
+
+// Admin panel: pending app-membership requests.
+function renderAdminPanel(el, f) {
+  if (!el) return;
+  if (!isAppAdmin()) { el.hidden = true; el.replaceChildren(); return; }
+  const reqs = state.pendingApprovals || [];
+  el.hidden = false;
+  el.replaceChildren();
+  if (!reqs.length) {
+    el.appendChild(makeEl("p", { class: "muted small", text: f.adminNoRequests || "Keine offenen Mitglieds-Anfragen." }));
+    return;
+  }
+  el.appendChild(makeEl("h4", { text: (f.adminHeader || "Mitglieds-Anfragen") + ` (${reqs.length})` }));
+  for (const r of reqs) {
+    el.appendChild(approvalRow(
+      r.display_name || r.email || r.id.slice(0, 8),
+      (r.email && r.display_name) ? r.email : "",
+      { approveApp: r.id }, { rejectApp: r.id }, f));
+  }
+}
+
+// Room-owner panel: pending join requests for the active room.
+function renderRoomRequests(f) {
+  const el = $("#friends-room-requests");
+  if (!el) return;
+  const isOwner = !!(state.activeRoom && state.supabaseUser && state.activeRoom.owner_id === state.supabaseUser.id);
+  const pending = isOwner ? state.roomMembers.filter((m) => m.status === "pending") : [];
+  el.replaceChildren();
+  if (!pending.length) { el.hidden = true; return; }
+  el.hidden = false;
+  el.appendChild(makeEl("h4", { text: (f.roomRequestsHeader || "Beitritts-Anfragen") + ` (${pending.length})` }));
+  for (const m of pending) {
+    el.appendChild(approvalRow(m.nickname || m.user_id.slice(0, 8), "", { approveRoom: m.user_id }, { rejectRoom: m.user_id }, f));
+  }
+}
+
 function renderFriends() {
   const dict = t();
   const f = dict.friends || {};
@@ -2505,50 +2658,79 @@ function renderFriends() {
     return;
   }
   card.hidden = false;
-  // Auth area
   const loginEl = $("#friends-login");
+  const recoveryEl = $("#friends-recovery");
   const accountEl = $("#friends-account");
   const roomEl = $("#friends-room");
-  if (state.supabaseUser) {
-    if (loginEl) loginEl.hidden = true;
-    if (accountEl) accountEl.hidden = false;
-    if (roomEl) roomEl.hidden = false;
-    const emailEl = $("#friends-user-email");
-    if (emailEl) {
-      // Anonymous users have no email — show a short user-id prefix instead.
-      emailEl.textContent = state.supabaseUser.email
-        || (t().friends?.anonymousLabel || "Anonymous") + " · " + state.supabaseUser.id.slice(0, 8);
-    }
-  } else {
-    if (loginEl) loginEl.hidden = false;
-    if (accountEl) accountEl.hidden = true;
-    if (roomEl) roomEl.hidden = true;
-    const status = $("#friends-login-status");
-    if (status) status.textContent = state.authPending ? (f.loginPending || "Check your inbox.") : "";
+  const pendingEl = $("#friends-pending");
+  const adminEl = $("#friends-admin");
+  const lb = $("#friends-leaderboard");
+  const hide = (el) => { if (el) el.hidden = true; };
+  const show = (el) => { if (el) el.hidden = false; };
+
+  // 0) Password-recovery flow takes over the whole card.
+  if (state.passwordRecovery) {
+    show(recoveryEl); hide(loginEl); hide(accountEl); hide(roomEl); hide(pendingEl); hide(adminEl);
+    if (lb) lb.replaceChildren();
+    return;
   }
-  // Room area
+  hide(recoveryEl);
+
+  // 1) Logged out → login form only.
+  if (!state.supabaseUser) {
+    show(loginEl); hide(accountEl); hide(roomEl); hide(pendingEl); hide(adminEl);
+    const status = $("#friends-login-status");
+    if (status && !status.textContent) status.textContent = state.authPending ? (f.loginPending || "Check your inbox.") : "";
+    if (lb) lb.replaceChildren();
+    return;
+  }
+
+  // 2) Logged in → account header (display name or email).
+  hide(loginEl); show(accountEl);
+  const emailEl = $("#friends-user-email");
+  if (emailEl) emailEl.textContent = state.profile?.display_name || state.supabaseUser.email || state.supabaseUser.id.slice(0, 8);
+
+  // 3) Admin approval panel (independent of room membership).
+  renderAdminPanel(adminEl, f);
+
+  // 4) App-level gate: not approved (and not admin) → block multiplayer.
+  if (!isAppApproved() && !isAppAdmin()) {
+    hide(roomEl);
+    if (pendingEl) {
+      show(pendingEl);
+      pendingEl.textContent = state.profile?.app_status === "rejected"
+        ? (f.rejected || "Dein Zugang wurde leider abgelehnt.")
+        : (f.awaitingApproval || "Anfrage gesendet — warte auf Freigabe durch den Admin.");
+    }
+    if (lb) lb.replaceChildren();
+    return;
+  }
+  hide(pendingEl); show(roomEl);
+
+  // 5) Room area.
   if (state.activeRoom) {
-    const noRoom = $("#friends-no-room");
-    const active = $("#friends-active-room");
-    if (noRoom) noRoom.hidden = true;
-    if (active) active.hidden = false;
+    hide($("#friends-no-room")); show($("#friends-active-room"));
     const codeEl = $("#friends-active-code");
     if (codeEl) codeEl.textContent = state.activeRoom.code;
+    renderRoomRequests(f);
   } else {
-    const noRoom = $("#friends-no-room");
-    const active = $("#friends-active-room");
-    if (noRoom) noRoom.hidden = false;
-    if (active) active.hidden = true;
+    show($("#friends-no-room")); hide($("#friends-active-room"));
   }
-  // Leaderboard
-  const lb = $("#friends-leaderboard");
+
+  // 6) Leaderboard (approved members only).
   if (!lb) return;
-  if (!state.supabaseUser) { lb.innerHTML = ""; return; }
-  if (!state.activeRoom) { lb.innerHTML = `<p class="muted small">${escape(f.noMembers || "Create or join a room.")}</p>`; return; }
-  if (!state.roomMembers.length) { lb.innerHTML = `<p class="muted small">${escape(f.noMembers || "Waiting for friends.")}</p>`; return; }
+  if (!state.activeRoom) { setNote(lb, f.noMembers || "Create or join a room."); return; }
+  // Am I still pending in this room? Show a notice instead of the board.
+  const myMembership = state.roomMembers.find((m) => m.user_id === state.supabaseUser.id);
+  if (myMembership && myMembership.status === "pending") {
+    setNote(lb, f.roomPending || "Beitritt gesendet — warte auf Freigabe durch den Raum-Owner.");
+    return;
+  }
+  const approvedMembers = state.roomMembers.filter((m) => m.status !== "pending");
+  if (!approvedMembers.length) { setNote(lb, f.noMembers || "Waiting for friends."); return; }
   // Compute per-member aggregates from state.roomBets.
   const byUser = new Map();
-  for (const m of state.roomMembers) byUser.set(m.user_id, { nick: m.nickname, total: 0, won: 0, lost: 0, open: 0, pl: 0, edgeSum: 0, edgeN: 0, last5: [] });
+  for (const m of approvedMembers) byUser.set(m.user_id, { nick: m.nickname, total: 0, won: 0, lost: 0, open: 0, pl: 0, edgeSum: 0, edgeN: 0, last5: [] });
   for (const b of state.roomBets) {
     const agg = byUser.get(b.user_id);
     if (!agg) continue;
@@ -2614,10 +2796,16 @@ function wireFriends() {
   $("#friends-login-btn")?.addEventListener("click", async () => {
     const email = $("#friends-email")?.value?.trim();
     if (!email) return;
-    await sendMagicLink(email);
+    const ok = await sendMagicLink(email);
+    const s = $("#friends-login-status");
+    if (s && !ok) s.textContent = t().friends?.magicErr || "Magic-Link fehlgeschlagen.";
   });
-  $("#friends-anon-btn")?.addEventListener("click", async () => {
-    await signInAnonymously();
+  $("#friends-reset-btn")?.addEventListener("click", async () => {
+    const email = $("#friends-email")?.value?.trim();
+    const s = $("#friends-login-status");
+    if (!email) { if (s) s.textContent = t().friends?.emailMissing || "Email eintragen."; return; }
+    const r = await sendPasswordReset(email);
+    if (s) s.textContent = r.ok ? (t().friends?.resetSent || "Reset-Mail gesendet — check deine Inbox.") : (r.error || "Fehler.");
   });
   // Email + password (primary path)
   $("#friends-signin-btn")?.addEventListener("click", async () => {
@@ -2635,15 +2823,32 @@ function wireFriends() {
   $("#friends-signup-btn")?.addEventListener("click", async () => {
     const email = $("#friends-email")?.value?.trim();
     const password = $("#friends-password")?.value || "";
+    const name = $("#friends-name")?.value?.trim();
     if (!email || !password) {
       const s = $("#friends-login-status"); if (s) s.textContent = t().friends?.pwMissing || "Email + Passwort eintragen.";
       return;
     }
-    const r = await signUpWithPassword(email, password);
+    const r = await signUpWithPassword(email, password, name);
     const s = $("#friends-login-status");
-    if (s) s.textContent = r.ok ? (t().friends?.signupOk || "Account erstellt + eingeloggt.") : (r.error || "Sign-up failed.");
+    if (s) s.textContent = r.ok ? (t().friends?.signupOk || "Anfrage gesendet — warte auf Freigabe.") : (r.error || "Sign-up failed.");
+  });
+  $("#friends-newpw-btn")?.addEventListener("click", async () => {
+    const pw = $("#friends-newpw")?.value || "";
+    const s = $("#friends-newpw-status");
+    const r = await completePasswordReset(pw);
+    if (r.ok) { state.passwordRecovery = false; if (s) s.textContent = ""; renderFriends(); }
+    else if (s) s.textContent = r.error || "Fehler.";
   });
   $("#friends-signout")?.addEventListener("click", supabaseSignOut);
+  // Delegated approve/reject for the admin + room-owner panels (survives re-render).
+  $("#friends-card")?.addEventListener("click", async (e) => {
+    const btn = e.target.closest("[data-approve-app],[data-reject-app],[data-approve-room],[data-reject-room]");
+    if (!btn) return;
+    if (btn.dataset.approveApp) await approveAppMember(btn.dataset.approveApp, true);
+    else if (btn.dataset.rejectApp) await approveAppMember(btn.dataset.rejectApp, false);
+    else if (btn.dataset.approveRoom) await approveRoomMember(state.activeRoom?.id, btn.dataset.approveRoom);
+    else if (btn.dataset.rejectRoom) await rejectRoomMember(state.activeRoom?.id, btn.dataset.rejectRoom);
+  });
   $("#friends-create-room")?.addEventListener("click", async () => {
     const nick = $("#friends-nickname")?.value?.trim();
     if (!nick) { alert(t().friends?.promptNickname || "Set a nickname first."); return; }
@@ -2670,13 +2875,22 @@ async function bootstrapMultiplayer() {
   // Register the auth listener BEFORE the first session lookup so we never
   // miss the SIGNED_IN event that fires asynchronously from
   // detectSessionInUrl after a magic-link redirect lands on /#access_token=…
-  state.supabase.auth.onAuthStateChange(async (_event, session) => {
+  state.supabase.auth.onAuthStateChange(async (event, session) => {
     state.supabaseUser = session?.user || null;
+    // A password-reset link lands here with a recovery session — show the
+    // new-password form instead of the normal UI until it's set.
+    if (event === "PASSWORD_RECOVERY") {
+      state.passwordRecovery = true;
+      renderFriends();
+      return;
+    }
+    await loadProfile();
     renderFriends();
-    // If the magic-link landing established a session, also hydrate the
+    // If the landing established a session, hydrate admin approvals + the
     // active room from localStorage and (re)load pools — those skip steps
     // ran with supabaseUser = null on first paint.
     if (session?.user) {
+      if (isAppAdmin()) { await loadPendingApprovals(); subscribeApprovalsRealtime(); renderFriends(); }
       try {
         const stored = JSON.parse(localStorage.getItem("wc26_active_room") || "null");
         if (stored?.id && stored?.code && !state.activeRoom) {
@@ -2696,6 +2910,8 @@ async function bootstrapMultiplayer() {
   // method is called.
   try { await state.supabase.auth.getSession(); } catch {}
   await refreshSupabaseUser();
+  await loadProfile();
+  if (isAppAdmin()) { await loadPendingApprovals(); subscribeApprovalsRealtime(); }
   // Restore active room from localStorage if any.
   try {
     const stored = JSON.parse(localStorage.getItem("wc26_active_room") || "null");

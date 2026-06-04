@@ -239,6 +239,10 @@
           <div id="friends-login" hidden>
             <p class="muted small" data-i18n="friends.pwHint">Login mit Email + Passwort — du bleibst eingeloggt, auch nach Reload und auf anderen Geräten.</p>
             <label class="friends-row">
+              <span data-i18n="friends.name">Name</span>
+              <input id="friends-name" type="text" autocomplete="name" maxlength="40" placeholder="dein Name" />
+            </label>
+            <label class="friends-row">
               <span data-i18n="friends.loginEmail">Email</span>
               <input id="friends-email" type="email" autocomplete="email" placeholder="you@example.com" />
             </label>
@@ -248,21 +252,33 @@
             </label>
             <div class="friends-row">
               <button id="friends-signin-btn" class="primary" type="button" data-i18n="friends.signin">Anmelden</button>
-              <button id="friends-signup-btn" class="copy-btn" type="button" data-i18n="friends.signup">Konto erstellen</button>
+              <button id="friends-signup-btn" class="copy-btn" type="button" data-i18n="friends.signup">Mitglied werden</button>
             </div>
+            <p class="muted small" data-i18n="friends.signupHint">Neu hier? Mit „Mitglied werden“ sendest du eine Anfrage — der Admin gibt dich frei.</p>
             <details style="margin-top: 12px">
-              <summary class="muted small" data-i18n="friends.altHeader">Andere Login-Optionen</summary>
+              <summary class="muted small" data-i18n="friends.altHeader">Andere Optionen</summary>
               <div class="friends-row" style="margin-top: 8px">
-                <button id="friends-anon-btn" class="copy-btn" type="button" data-i18n="friends.anonButton">Anonymer Login (kein Email)</button>
                 <button id="friends-login-btn" class="copy-btn" type="button" data-i18n="friends.loginButton">Magic-Link senden</button>
+                <button id="friends-reset-btn" class="copy-btn" type="button" data-i18n="friends.resetButton">Passwort vergessen?</button>
               </div>
             </details>
             <p id="friends-login-status" class="muted small"></p>
+          </div>
+          <div id="friends-recovery" hidden>
+            <p class="muted small" data-i18n="friends.recoveryHint">Setze ein neues Passwort für deinen Account.</p>
+            <label class="friends-row">
+              <span data-i18n="friends.newPassword">Neues Passwort</span>
+              <input id="friends-newpw" type="password" autocomplete="new-password" placeholder="••••••••" />
+            </label>
+            <button id="friends-newpw-btn" class="primary" type="button" data-i18n="friends.newPwSave">Passwort speichern</button>
+            <p id="friends-newpw-status" class="muted small"></p>
           </div>
           <div id="friends-account" hidden>
             <span class="friends-handle"><b id="friends-user-email"></b></span>
             <button id="friends-signout" class="copy-btn" type="button" data-i18n="friends.signout">Abmelden</button>
           </div>
+          <p id="friends-pending" class="muted small" hidden></p>
+          <div id="friends-admin" hidden></div>
         </div>
 
         <div id="friends-room" class="friends-block" hidden>
@@ -288,6 +304,7 @@
               <button id="friends-copy-code" class="copy-btn" type="button" data-i18n="friends.copyCode">Kopieren</button>
               <button id="friends-leave-room" class="copy-btn" type="button" data-i18n="friends.leave">Verlassen</button>
             </p>
+            <div id="friends-room-requests"></div>
           </div>
         </div>
 

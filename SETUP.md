@@ -1,62 +1,84 @@
-# Setup Guide — Friends & Pools
+# Setup Guide — Friends, Membership & Pools
 
-## Mandatory (5 min)
+Die App nutzt ein **zweistufiges Mitglieder-Gate**:
 
-### 1. Supabase Anonymous Sign-Ins aktivieren
+1. **App-Ebene** — du (Admin, `briannothdurft@icloud.com`) gibst jeden neuen User frei, bevor er überhaupt mitspielen darf.
+2. **Raum-Ebene** — der jeweilige Raum-Owner gibt app-freigegebene Leute für *seinen* Raum frei.
 
-This is the **one toggle** that makes everything work without email/SMTP gefummel.
-
-1. Supabase Dashboard → `wc26` project
-2. Linke Sidebar → **Authentication** (Schloss-Icon)
-3. **Sign In / Providers** (NOT "Providers" under Auth — exact name varies; look for the providers list)
-4. Find **Anonymous** in the list → toggle it **ON**
-5. Save
-
-That's it. Friends can now click **"Anonymous login"** on the app — no email, no SMTP, no waiting.
+Login läuft über **Email + Passwort** (kein Anonymous mehr). Die DB-Migration `supabase/migrations/0003_membership.sql` ist bereits angewendet.
 
 ---
 
-## Optional (only if you want email-login working too)
+## Dashboard-Setup (Supabase `wc26`, einmalig, ~15 Min)
 
-### 2. Custom SMTP via Resend (15 min, if Magic-Link via email is needed)
+Alles im Supabase-Dashboard → Project `wc26` (`kfduunhhjdvxwgzgmhue`).
 
-iCloud + Supabase Built-in SMTP = unreliable. If you want Magic-Link emails to actually arrive, set up Resend (free 100 mails/day):
+### 1. Custom SMTP via Resend (PFLICHT — sonst keine Reset-/Magic-Mails)
 
-1. https://resend.com → Sign up
-2. Resend Dashboard → "API Keys" → Create → copy `re_...` key
-3. Supabase Dashboard → **Project Settings** → **Authentication** → **SMTP Settings**
-4. Toggle "Enable Custom SMTP" on, enter:
+Der eingebaute Supabase-SMTP ist hart rate-limited (Familie kassiert `429`). Resend ist gratis (100 Mails/Tag):
+
+1. <https://resend.com> → Sign up → **API Keys** → Create → `re_...` kopieren
+2. **Project Settings → Authentication → SMTP Settings** → „Enable Custom SMTP" an:
    ```
-   Sender email:    onboarding@resend.dev
-   Sender name:     WC 2026
-   Host:            smtp.resend.com
-   Port:            465
-   Username:        resend
-   Password:        re_... (your Resend API key)
+   Sender email: onboarding@resend.dev   (oder eigene verifizierte Domain)
+   Sender name:  WC 2026
+   Host:         smtp.resend.com
+   Port:         465
+   Username:     resend
+   Password:     re_...   (dein Resend API-Key)
    ```
-5. Save → test in Friends → Email → Send magic link
+3. Save
 
-### 3. Per-Match Bookmaker Odds via The Odds API (optional, 10 min)
+### 2. Email-Login konfigurieren
 
-For the "Bookies" comparison column in match panels:
+**Authentication → Providers → Email:**
+- **„Confirm email" → AUS** — deine manuelle Freigabe ersetzt die Email-Bestätigung, der User ist nach Signup sofort (als `pending`) drin.
+- **Anonymous-Provider → AUS** — nur echte Member.
 
-1. https://the-odds-api.com → Get API key (free 500 req/mo)
-2. GitHub Repo → Settings → Secrets and variables → Actions → New secret `THE_ODDS_API_KEY` → paste key
-3. Actions → "Scrape bookmaker odds" → Run workflow → main
-4. After ~1 min, `data/match-odds.json` is committed; Vercel redeploys; "Bookies" column appears
+### 3. URLs
+
+**Authentication → URL Configuration:**
+- Site URL: `https://fifa-orpin.vercel.app`
+- Redirect URLs: `https://fifa-orpin.vercel.app/**`
+
+### 4. Passwort-Sicherheit (empfohlen)
+
+**Authentication → Password security → „Leaked password protection" → AN** (blockt via HaveIBeenPwned kompromittierte Passwörter — sinnvoll, da jetzt Passwörter genutzt werden).
+
+---
+
+## Wie das Gate funktioniert
+
+- **Neuer User:** „Mitglied werden" (Name + Email + Passwort) → Account angelegt, `app_status = pending`. Er sieht *„Anfrage gesendet — warte auf Freigabe durch den Admin."*
+- **Du (Admin):** im Friends-Tab erscheint „Mitglieds-Anfragen (n)" mit **Freigeben / Ablehnen** (live via Realtime).
+- **Freigegebener User:** kann Räume erstellen (→ wird Owner) oder per Code beitreten.
+- **Raum-Beitritt:** landet auf `pending`; der Raum-Owner sieht „Beitritts-Anfragen (n)" und gibt frei. Erst dann sieht der Beitretende Leaderboard + Bets.
+- **Passwort vergessen:** „Passwort vergessen?" → Reset-Mail (via Resend) → neues Passwort setzen.
+
+Admin = `briannothdurft@icloud.com` (in der Migration geseedet). Weitere Admins: in Supabase `update profiles set is_admin = true where email = '…'`.
+
+---
+
+## Optional: Per-Match Bookmaker Odds (The Odds API, 10 Min)
+
+Für die „Bookies"-Vergleichsspalte in den Match-Panels:
+
+1. <https://the-odds-api.com> → API-Key holen (gratis 500 req/mo)
+2. GitHub Repo → Settings → Secrets and variables → Actions → New secret `THE_ODDS_API_KEY` → Key einfügen
+3. Actions → „Scrape bookmaker odds" → Run workflow → `main`
+4. Nach ~1 Min ist `data/match-odds.json` committed; Vercel redeployt; „Bookies"-Spalte erscheint
 
 ---
 
 ## Verify End-to-End
 
-After step 1 (Anonymous Sign-In enabled):
+Nach dem Dashboard-Setup (Schritte 1–3):
 
-1. Open https://fifa-orpin.vercel.app on phone or desktop
-2. Tab **Bets & Wallet** → Friends section
-3. Click **"Anonymous login"** → you're logged in as `Gast · <8-char-id>`
-4. Enter Nickname → click **"Raum erstellen"** → 6-char code appears
-5. Share the code with family → they do the same on their device
-6. Place bets → leaderboard updates live (WebSocket realtime)
-7. Pools-section: payment-handles eintragen + Bracket/CTP/P&L pool starten
+1. <https://fifa-orpin.vercel.app> → Tab **Bets & Wallet** → Friends-Section
+2. Mit einer **Zweit-Email** „Mitglied werden" → es erscheint *„Anfrage gesendet"*
+3. Als **du** eingeloggt (`briannothdurft@icloud.com`) → „Mitglieds-Anfragen" → **Freigeben**
+4. Zweit-Account: **Raum erstellen** → 6-Zeichen-Code; oder bestehendem Raum per Code beitreten → Owner gibt frei
+5. Tipps abgeben → Leaderboard updated live (WebSocket-Realtime)
+6. Pools-Section: Payment-Handles eintragen + Bracket/CTP/P&L-Pool starten
 
-If anything's not working: open DevTools (F12) → Console → look for `Anonymous sign-in failed:` messages; usually a misconfiguration in Supabase Sign In / Providers.
+Wenn etwas klemmt: DevTools (F12) → Console + Supabase → Authentication → Logs (`get_logs auth`) prüfen.
