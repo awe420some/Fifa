@@ -237,11 +237,16 @@
 
         <div id="friends-auth" class="friends-block">
           <div id="friends-login" hidden>
-            <label class="friends-row">
-              <span data-i18n="friends.loginEmail">Email</span>
-              <input id="friends-email" type="email" autocomplete="email" placeholder="you@example.com" />
-            </label>
-            <button id="friends-login-btn" class="primary" type="button" data-i18n="friends.loginButton">Magic-Link senden</button>
+            <p class="muted small" data-i18n="friends.anonHint">Ein-Klick-Login ohne Email — empfohlen für Family-Pools.</p>
+            <button id="friends-anon-btn" class="primary" type="button" data-i18n="friends.anonButton">Anonymer Login</button>
+            <details style="margin-top: 12px">
+              <summary class="muted small" data-i18n="friends.emailHeader">Lieber mit Email (Magic-Link)</summary>
+              <label class="friends-row" style="margin-top: 8px">
+                <span data-i18n="friends.loginEmail">Email</span>
+                <input id="friends-email" type="email" autocomplete="email" placeholder="you@example.com" />
+              </label>
+              <button id="friends-login-btn" class="copy-btn" type="button" data-i18n="friends.loginButton">Magic-Link senden</button>
+            </details>
             <p id="friends-login-status" class="muted small"></p>
           </div>
           <div id="friends-account" hidden>
