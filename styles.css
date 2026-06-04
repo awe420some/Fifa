@@ -22,15 +22,24 @@
   --accent-3: #ff6b6b;               /* danger / loss */
   --accent-danger: var(--accent-3);
   /* Typography */
+  --font-display: "Sora", "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
   --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
-  /* Shadows */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.22);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.32);
-  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.48);
+  /* Shadows — deeper + more visible on the dark background */
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.40);
+  --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 20px 50px rgba(0, 0, 0, 0.55);
   --shadow: var(--shadow-lg);        /* legacy alias */
+  /* Glows + gradients — the premium-betting depth */
+  --glow-accent: 0 0 24px rgba(0, 217, 126, 0.28);
+  --glow-gold:   0 0 26px rgba(255, 209, 102, 0.30);
+  --glow-danger: 0 0 22px rgba(255, 107, 107, 0.28);
+  --grad-card:   linear-gradient(152deg, var(--bg-1) 0%, var(--bg-2) 100%);
+  --grad-accent: linear-gradient(135deg, #00e98a 0%, #00b86a 100%);
+  --grad-gold:   linear-gradient(135deg, #ffe08a 0%, #f5b73e 100%);
   /* Transitions */
-  --t-fast: 120ms; --t-base: 200ms;
+  --t-fast: 130ms; --t-base: 220ms; --t-slow: 400ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 }
 * { box-sizing: border-box; }
 html, body {
@@ -71,11 +80,13 @@ header.hero {
   border-color: var(--accent); font-weight: 700;
 }
 .hero h1 {
-  font-size: clamp(2rem, 5vw, 3.2rem);
-  margin: 0 0 8px; letter-spacing: 0.5px;
-  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  font-family: var(--font-display);
+  font-size: clamp(2.2rem, 5.5vw, 3.7rem);
+  font-weight: 800; margin: 0 0 10px; letter-spacing: -0.015em; line-height: 1.05;
+  background: linear-gradient(100deg, var(--accent) 0%, var(--accent-2) 55%, var(--accent) 100%);
   -webkit-background-clip: text; background-clip: text;
   color: transparent;
+  filter: drop-shadow(0 3px 24px rgba(0, 217, 126, 0.28));
 }
 .hero .subtitle { color: var(--muted); margin: 0; font-size: 1.05rem; }
 .hero .snapshot { color: var(--muted); font-size: 0.85rem; margin: 6px 0 0; letter-spacing: 1px; text-transform: uppercase; }
@@ -93,20 +104,44 @@ header.hero {
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.card {
-  background: var(--bg-1); border: 1px solid var(--line);
-  border-radius: var(--r-lg); padding: var(--s-5); margin-bottom: var(--s-4);
-  box-shadow: var(--shadow-md);
-  transition: box-shadow var(--t-fast), border-color var(--t-fast), transform var(--t-fast);
+/* ── Redesign: focus rings + hero atmosphere + reduced-motion guard ── */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
 }
-.card:hover { border-color: var(--line-strong); box-shadow: var(--shadow-lg); }
+header.hero::before {
+  content: ""; position: absolute; inset: -120px 0 auto 0; height: 340px;
+  z-index: -1; pointer-events: none;
+  background: radial-gradient(ellipse 55% 100% at 50% 0%, rgba(0, 217, 126, 0.16), transparent 72%);
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important; animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important; scroll-behavior: auto !important;
+  }
+}
+
+.card {
+  background: var(--grad-card); border: 1px solid var(--line);
+  border-radius: var(--r-xl); padding: var(--s-5); margin-bottom: var(--s-4);
+  box-shadow: var(--shadow-md); position: relative;
+  transition: box-shadow var(--t-base) var(--ease-out), border-color var(--t-base), transform var(--t-base) var(--ease-out);
+}
+.card:hover {
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow-lg), var(--glow-accent);
+  transform: translateY(-2px);
+}
 .card.wide { grid-column: 1 / -1; }
 .card h3 {
-  margin: 0 0 var(--s-3); font-size: 0.95rem; letter-spacing: 0.06em;
+  font-family: var(--font-display);
+  margin: 0 0 var(--s-3); font-size: 1.05rem; letter-spacing: 0.07em;
   color: var(--accent-2); text-transform: uppercase; font-weight: 700;
 }
 .card h4 {
-  margin: var(--s-4) 0 var(--s-2); font-size: 0.82rem; letter-spacing: 0.06em;
+  font-family: var(--font-display);
+  margin: var(--s-4) 0 var(--s-2); font-size: 0.9rem; letter-spacing: 0.05em;
   color: var(--accent); text-transform: uppercase; font-weight: 600;
 }
 .card p, .card li { line-height: 1.5; }
@@ -681,8 +716,13 @@ footer.foot {
 .stake-input input:focus { outline: none; }
 .bet-slip-summary .slip-row { display: flex; justify-content: space-between; margin: 4px 0; font-size: 0.92rem; }
 .bet-slip-summary button { width: 100%; padding: 8px 12px; margin-top: 6px; border-radius: 6px; font-family: inherit; font-weight: 700; cursor: pointer; border: 1px solid rgba(127,168,150,0.35); background: transparent; color: var(--ink); }
-.bet-slip-summary button.primary { background: var(--accent-2, #00d97e); color: #0a1a14; border-color: transparent; }
-.bet-slip-summary button.primary:hover { filter: brightness(1.1); }
+.bet-slip-summary button.primary {
+  background: var(--grad-gold); color: #1a1205; border-color: transparent;
+  box-shadow: var(--glow-gold);
+  transition: transform var(--t-fast) var(--ease-out), box-shadow var(--t-base), filter var(--t-fast);
+}
+.bet-slip-summary button.primary:hover { filter: brightness(1.06); transform: translateY(-1px); box-shadow: var(--glow-gold), 0 6px 18px rgba(245,183,62,0.32); }
+.bet-slip-summary button.primary:active { transform: translateY(0); }
 
 .bet-slip.collapsed { width: auto; }
 .bet-slip.collapsed #bet-slip-items,
@@ -698,9 +738,11 @@ footer.foot {
 .wallet-stats > div { background: rgba(127,168,150,0.06); border: 1px solid rgba(127,168,150,0.18); border-radius: 8px; padding: 10px 14px; }
 .wallet-stats > div span { display: block; font-size: 0.8rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
 .wallet-stats > div b { font-size: 1.4rem; font-weight: 700; display: block; margin-top: 4px; }
-.wallet-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; margin: 8px 0 16px; }
-.wallet-table th, .wallet-table td { padding: 6px 10px; text-align: left; border-bottom: 1px solid rgba(127,168,150,0.10); vertical-align: top; }
-.wallet-table th { color: var(--muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.wallet-table { width: 100%; border-collapse: collapse; font-size: 0.92rem; margin: 10px 0 18px; }
+.wallet-table th, .wallet-table td { padding: 11px 14px; text-align: left; border-bottom: 1px solid rgba(127,168,150,0.10); vertical-align: top; }
+.wallet-table th { color: var(--muted); font-size: 0.74rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; }
+.wallet-table tbody tr { transition: background var(--t-fast); }
+.wallet-table tbody tr:hover { background: rgba(0, 217, 126, 0.05); }
 
 /* ─────────── Tab navigation ─────────── */
 
@@ -725,10 +767,11 @@ footer.foot {
 }
 .tab-link:hover { background: rgba(0, 217, 126, 0.08); color: var(--ink); }
 .tab-link.active {
-  background: rgba(0, 217, 126, 0.18);
-  color: var(--accent);
-  box-shadow: inset 0 0 0 1px rgba(0, 217, 126, 0.45);
+  background: var(--grad-accent);
+  color: #04130c; font-weight: 700;
+  box-shadow: var(--glow-accent), 0 2px 8px rgba(0, 0, 0, 0.3);
 }
+.tab-link.active:hover { background: var(--grad-accent); color: #04130c; }
 
 /* tab-hidden is applied via JS to every <section data-tab> that doesn't
    match state.activeTab. Stronger than .hidden — beats any inline display. */
@@ -737,17 +780,20 @@ section.tab-hidden { display: none !important; }
 /* ─────────── Modernization polish (PR A.2 cascade) ─────────── */
 
 .copy-btn {
-  background: transparent; color: var(--accent);
+  background: rgba(0, 217, 126, 0.10); color: var(--accent);
   border: 1px solid rgba(0, 217, 126, 0.4);
   padding: var(--s-2) var(--s-4); border-radius: var(--r-md);
-  font-family: inherit; font-weight: 600; font-size: 0.88rem;
-  cursor: pointer; transition: all var(--t-fast);
+  font-family: inherit; font-weight: 600; font-size: 0.9rem;
+  cursor: pointer;
+  transition: background var(--t-fast), border-color var(--t-fast), transform var(--t-fast) var(--ease-out), box-shadow var(--t-base);
 }
 .copy-btn:hover {
-  background: rgba(0, 217, 126, 0.12);
+  background: rgba(0, 217, 126, 0.18);
   border-color: var(--accent);
   transform: translateY(-1px);
+  box-shadow: var(--glow-accent);
 }
+.copy-btn:active { transform: translateY(0); }
 
 /* Tables: zebra rows + sticky thead in the long ones (mega-player + schedule) */
 table tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.02); }
@@ -781,22 +827,31 @@ table tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.02); }
 }
 .friends-row input:focus { outline: none; border-color: var(--accent); }
 .friends-row button.primary {
-  background: var(--accent); color: var(--bg-0);
+  background: var(--grad-accent); color: #04130c;
   border: 0; padding: var(--s-2) var(--s-4); border-radius: var(--r-md);
   font: inherit; font-weight: 700; cursor: pointer;
+  box-shadow: var(--glow-accent);
+  transition: transform var(--t-fast) var(--ease-out), filter var(--t-fast), box-shadow var(--t-base);
 }
-.friends-row button.primary:hover { filter: brightness(1.05); }
+.friends-row button.primary:hover { filter: brightness(1.05); transform: translateY(-1px); }
 .friends-handle b { color: var(--accent); }
 #friends-leaderboard table { margin-top: var(--s-3); }
 
 /* ─────────── Pools (PR C) ─────────── */
 
 .pool-card {
-  background: rgba(127, 168, 150, 0.04);
+  background: var(--grad-card);
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
   padding: var(--s-4);
   margin: var(--s-3) 0;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow var(--t-base) var(--ease-out), border-color var(--t-base), transform var(--t-base) var(--ease-out);
+}
+.pool-card:hover {
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow-md), var(--glow-accent);
+  transform: translateY(-2px);
 }
 .pool-card header {
   display: flex; justify-content: space-between; align-items: center;
@@ -808,9 +863,20 @@ table tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.02); }
   font-size: 0.72rem; font-weight: 700; letter-spacing: 0.04em;
   text-transform: uppercase;
 }
-.pool-status-open    { background: rgba(0, 217, 126, 0.15); color: var(--accent); }
-.pool-status-locked  { background: rgba(255, 209, 102, 0.15); color: var(--accent-2); }
-.pool-status-settled { background: rgba(127, 168, 150, 0.15); color: var(--muted); }
+.pool-status-open    { background: rgba(0, 217, 126, 0.18);  color: var(--accent);   border: 1px solid rgba(0, 217, 126, 0.38);  box-shadow: 0 0 12px rgba(0, 217, 126, 0.18); }
+.pool-status-locked  { background: rgba(255, 209, 102, 0.18); color: var(--accent-2); border: 1px solid rgba(255, 209, 102, 0.38); box-shadow: 0 0 12px rgba(255, 209, 102, 0.18); }
+.pool-status-settled { background: rgba(127, 168, 150, 0.15); color: var(--muted);    border: 1px solid var(--line); }
+
+/* Pool standings: gild the leader (rank 1 / 👑) + label the pick blocks */
+.pool-card .wallet-table tbody tr:first-child td:first-child {
+  color: var(--accent-2); font-weight: 800;
+  text-shadow: 0 0 12px rgba(255, 209, 102, 0.45);
+}
+.pool-picks { margin-top: var(--s-3); }
+.pool-picks h5 {
+  margin: 0 0 var(--s-2); font-size: 0.82rem; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--accent); font-family: var(--font-display);
+}
 
 .pool-actions {
   margin-top: var(--s-3);
