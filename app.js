@@ -2610,12 +2610,35 @@ function wireFriends() {
 async function bootstrapMultiplayer() {
   state.supabase = await initSupabase();
   if (!state.supabase) { renderFriends(); return; }
-  await refreshSupabaseUser();
-  // Auth changes (e.g. magic-link landing back on /).
+  // Register the auth listener BEFORE the first session lookup so we never
+  // miss the SIGNED_IN event that fires asynchronously from
+  // detectSessionInUrl after a magic-link redirect lands on /#access_token=…
   state.supabase.auth.onAuthStateChange(async (_event, session) => {
     state.supabaseUser = session?.user || null;
     renderFriends();
+    // If the magic-link landing established a session, also hydrate the
+    // active room from localStorage and (re)load pools — those skip steps
+    // ran with supabaseUser = null on first paint.
+    if (session?.user) {
+      try {
+        const stored = JSON.parse(localStorage.getItem("wc26_active_room") || "null");
+        if (stored?.id && stored?.code && !state.activeRoom) {
+          state.activeRoom = stored;
+          await loadRoomData();
+          subscribeRoomRealtime();
+        }
+      } catch {}
+      await loadPaymentHandles();
+      await loadActivePools();
+      renderPools();
+    }
   });
+  // Belt-and-braces: also explicitly call getSession() so any session
+  // payload in the URL hash is processed deterministically. Some
+  // supabase-js versions delay detectSessionInUrl until the first auth
+  // method is called.
+  try { await state.supabase.auth.getSession(); } catch {}
+  await refreshSupabaseUser();
   // Restore active room from localStorage if any.
   try {
     const stored = JSON.parse(localStorage.getItem("wc26_active_room") || "null");
