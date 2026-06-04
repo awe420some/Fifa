@@ -2869,6 +2869,23 @@ function wireFriends() {
   $("#friends-leave-room")?.addEventListener("click", leaveActiveRoom);
 }
 
+// Fallback when localStorage has no active room (new device / cleared cache /
+// after an update): find a room where the user is an approved member and
+// activate the most recent one. The room lives in the DB, not just the browser.
+async function restoreRoomFromDb() {
+  if (!state.supabase || !state.supabaseUser) return;
+  try {
+    const { data: memberships } = await state.supabase
+      .from("room_members").select("room_id")
+      .eq("user_id", state.supabaseUser.id).eq("status", "approved");
+    const roomIds = (memberships || []).map((m) => m.room_id);
+    if (!roomIds.length) return;
+    const { data: rooms } = await state.supabase
+      .from("rooms").select().in("id", roomIds).order("created_at", { ascending: false });
+    if (rooms?.length) await activateRoom(rooms[0]);
+  } catch {}
+}
+
 async function bootstrapMultiplayer() {
   state.supabase = await initSupabase();
   if (!state.supabase) { renderFriends(); return; }
@@ -2912,7 +2929,8 @@ async function bootstrapMultiplayer() {
   await refreshSupabaseUser();
   await loadProfile();
   if (isAppAdmin()) { await loadPendingApprovals(); subscribeApprovalsRealtime(); }
-  // Restore active room from localStorage if any.
+  // Restore active room: localStorage first, else fall back to DB membership
+  // (so a device switch / cleared cache / update still finds your room).
   try {
     const stored = JSON.parse(localStorage.getItem("wc26_active_room") || "null");
     if (stored?.id && stored?.code && state.supabaseUser) {
@@ -2921,6 +2939,7 @@ async function bootstrapMultiplayer() {
       subscribeRoomRealtime();
     }
   } catch {}
+  if (!state.activeRoom && state.supabaseUser) await restoreRoomFromDb();
   renderFriends();
   // Also kick off pools / handles loading and render the pools card.
   await loadPaymentHandles();
