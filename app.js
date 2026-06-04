@@ -2291,6 +2291,29 @@ async function sendMagicLink(email) {
   }
 }
 
+// Anonymous sign-in — no email required, no SMTP dependency.
+// Requires "Allow Anonymous Sign-Ins" enabled in Supabase Auth settings.
+// Creates a real auth.users row with a generated UUID; from there the
+// existing room + bets RLS works identically to email-authed users.
+async function signInAnonymously() {
+  if (!state.supabase) return false;
+  try {
+    const { error } = await state.supabase.auth.signInAnonymously();
+    if (error) {
+      console.warn("Anonymous sign-in failed:", error.message);
+      // Common case: Supabase has Anonymous Sign-Ins disabled. Surface
+      // a hint via the friends-login-status field so the user knows.
+      const status = $("#friends-login-status");
+      if (status) status.textContent = (t().friends?.anonError || "Anonymous sign-in is disabled in Supabase. Toggle it on in Authentication → Sign In / Providers → Anonymous.");
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn("Anonymous sign-in threw:", e?.message || e);
+    return false;
+  }
+}
+
 async function supabaseSignOut() {
   if (!state.supabase) return;
   await leaveActiveRoom();
@@ -2458,7 +2481,11 @@ function renderFriends() {
     if (accountEl) accountEl.hidden = false;
     if (roomEl) roomEl.hidden = false;
     const emailEl = $("#friends-user-email");
-    if (emailEl) emailEl.textContent = state.supabaseUser.email || "—";
+    if (emailEl) {
+      // Anonymous users have no email — show a short user-id prefix instead.
+      emailEl.textContent = state.supabaseUser.email
+        || (t().friends?.anonymousLabel || "Anonymous") + " · " + state.supabaseUser.id.slice(0, 8);
+    }
   } else {
     if (loginEl) loginEl.hidden = false;
     if (accountEl) accountEl.hidden = true;
@@ -2555,6 +2582,9 @@ function wireFriends() {
     const email = $("#friends-email")?.value?.trim();
     if (!email) return;
     await sendMagicLink(email);
+  });
+  $("#friends-anon-btn")?.addEventListener("click", async () => {
+    await signInAnonymously();
   });
   $("#friends-signout")?.addEventListener("click", supabaseSignOut);
   $("#friends-create-room")?.addEventListener("click", async () => {
