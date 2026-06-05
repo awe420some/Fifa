@@ -400,6 +400,9 @@
   </div>
 
   <script src="/api/config.js"></script>
+  <!-- Self-hosted Supabase (precached by the SW) so the login gate loads instantly,
+       reliably, and offline — no slow runtime CDN import. Must come before app.js. -->
+  <script src="vendor/supabase.js"></script>
   <script type="module" src="app.js"></script>
 </body>
 </html>

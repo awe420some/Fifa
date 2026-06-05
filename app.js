@@ -2251,14 +2251,16 @@ async function initSupabase() {
   url = url.replace(/\/rest\/v1$/i, "");            // /rest/v1 suffix
   url = url.replace(/\/auth\/v1$/i, "");            // /auth/v1 suffix (just in case)
   try {
-    // Bound the CDN import so a slow/cold esm.sh never hangs the boot (the
-    // login gate waits on this — a hung import would otherwise show "Lädt…"
-    // forever). On timeout we return null → the gate fails open.
-    const mod = await Promise.race([
-      import("https://esm.sh/@supabase/supabase-js@2"),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("supabase-js import timed out")), 7000)),
-    ]);
-    const client = mod.createClient(url, cfg.anonKey, {
+    // Supabase is self-hosted (vendor/supabase.js — loaded via <script> before
+    // app.js and precached by the service worker), so window.supabase is ready
+    // synchronously at boot. No runtime CDN import → the login gate never hangs
+    // waiting on a slow/cold esm.sh fetch and never wrongly fails open.
+    const lib = (typeof window !== "undefined") ? window.supabase : null;
+    if (!lib || typeof lib.createClient !== "function") {
+      console.warn("Supabase library not loaded (vendor/supabase.js missing?) — multiplayer hidden.");
+      return null;
+    }
+    const client = lib.createClient(url, cfg.anonKey, {
       auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
     });
     return client;
@@ -3674,9 +3676,12 @@ function maybeStartTour() {
 
 function isIosSafari() {
   const ua = navigator.userAgent || "";
+  // Require an actual touch device too — guards against odd desktop UAs that
+  // happen to contain "iPad"/"Safari", so the install banner can never show on desktop.
+  const touch = (navigator.maxTouchPoints || 0) > 0;
   const isIos = /iPhone|iPad|iPod/.test(ua) && !window.MSStream;
   const isSafari = /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS|OPiOS/.test(ua);
-  return isIos && isSafari;
+  return isIos && isSafari && touch;
 }
 
 function isStandalone() {
