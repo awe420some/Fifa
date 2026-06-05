@@ -2251,7 +2251,13 @@ async function initSupabase() {
   url = url.replace(/\/rest\/v1$/i, "");            // /rest/v1 suffix
   url = url.replace(/\/auth\/v1$/i, "");            // /auth/v1 suffix (just in case)
   try {
-    const mod = await import("https://esm.sh/@supabase/supabase-js@2");
+    // Bound the CDN import so a slow/cold esm.sh never hangs the boot (the
+    // login gate waits on this — a hung import would otherwise show "Lädt…"
+    // forever). On timeout we return null → the gate fails open.
+    const mod = await Promise.race([
+      import("https://esm.sh/@supabase/supabase-js@2"),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("supabase-js import timed out")), 7000)),
+    ]);
     const client = mod.createClient(url, cfg.anonKey, {
       auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
     });
@@ -2666,8 +2672,16 @@ function renderAuthGate() {
     document.body.classList.toggle("auth-locked", on);
   };
 
-  // No backend configured (e.g. local/dev) → never lock the user out.
-  if (!state.supabase) { lock(false); if (chip) chip.hidden = true; return; }
+  // Distinguish "backend not configured" from "client still initializing".
+  const configured = !!(typeof window !== "undefined" && window.WC26_SUPABASE && window.WC26_SUPABASE.url);
+  if (!configured) { lock(false); if (chip) chip.hidden = true; return; }   // no backend → no gate
+  if (!state.supabase) {
+    // Configured but client not ready: spinner while initializing; once init has
+    // finished without a client (failed / timed out), fail OPEN so a flaky CDN or
+    // network never bricks the whole app behind the gate.
+    if (state.supabaseInitDone) { lock(false); if (chip) chip.hidden = true; return; }
+    setView("loading"); lock(true); if (chip) chip.hidden = true; return;
+  }
   // Password-recovery link landed → new-password form.
   if (state.passwordRecovery) { setView("recovery"); lock(true); if (chip) chip.hidden = true; return; }
 
@@ -2685,6 +2699,11 @@ function renderAuthGate() {
     if (toggle) toggle.textContent = signup ? (a.toSignin || "Schon dabei? Anmelden") : (a.toSignup || "Noch kein Konto? Konto erstellen");
     lock(true); if (chip) chip.hidden = true; return;
   }
+
+  // Profile still loading (fetch in flight or failed) → spinner, NOT "pending".
+  // The boot safety-net fails open if it never arrives, so a stalled profile
+  // fetch can't lock a logged-in user out behind the gate.
+  if (!state.profile) { setView("loading"); lock(true); if (chip) chip.hidden = true; return; }
 
   // Logged in but not yet approved (and not admin) → pending screen.
   if (!isAppApproved() && !isAppAdmin()) {
@@ -2975,6 +2994,7 @@ async function restoreRoomFromDb() {
 
 async function bootstrapMultiplayer() {
   state.supabase = await initSupabase();
+  state.supabaseInitDone = true;   // init finished (success or fail) — lets the gate fail open
   if (!state.supabase) { renderFriends(); return; }
   // Register the auth listener BEFORE the first session lookup so we never
   // miss the SIGNED_IN event that fires asynchronously from
@@ -4633,6 +4653,19 @@ document.addEventListener("DOMContentLoaded", async () => {
     // Multiplayer is opt-in via /api/config.js; the call no-ops if the
     // Supabase env vars aren't set and the friends-card stays hidden.
     bootstrapMultiplayer();
+    // Safety net: never let the login gate hang on "Lädt…". If Supabase is slow
+    // to initialize (cold CDN / flaky network) or a profile fetch stalls, resolve
+    // the gate after a few seconds — show login if the client came up, else fail open.
+    setTimeout(() => {
+      const g = document.querySelector("#auth-gate");
+      if (!g || g.hidden) return;
+      const loadingEl = g.querySelector('[data-auth-view="loading"]');
+      if (!loadingEl || loadingEl.hidden) return;   // already moved past the spinner
+      state.supabaseInitDone = true;
+      renderAuthGate();
+      const stuck = loadingEl && !loadingEl.hidden;
+      if (stuck && !g.hidden) { g.hidden = true; document.body.classList.remove("auth-locked"); }
+    }, 8000);
     startLivePollingIfActive();
     // Persist the current snapshot so the NEXT visit can diff against it.
     persistPrev(cloneCurrentSnapshot());
