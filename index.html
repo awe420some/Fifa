@@ -58,6 +58,68 @@
     </div>
   </div>
 
+  <!-- Full-screen login gate: covers the app until the user is signed in + approved. -->
+  <div id="auth-gate" class="auth-gate">
+    <div class="auth-gate-bg" aria-hidden="true"></div>
+    <div class="auth-card">
+      <div class="auth-brand"><span class="auth-dot"></span><span>WC<i>26</i></span></div>
+
+      <!-- loading: while the session is being checked -->
+      <div data-auth-view="loading" class="auth-view">
+        <div class="spinner"></div>
+        <p class="muted small" data-i18n="auth.loading">Lädt…</p>
+      </div>
+
+      <!-- login / signup (one form, toggled) -->
+      <form id="auth-form" data-auth-view="auth" class="auth-view" hidden>
+        <h2 id="auth-heading" data-i18n="auth.signinHeading">Anmelden</h2>
+        <p class="auth-sub muted small" data-i18n="auth.claim">Dein Account für die WM-2026-Tipprunde.</p>
+        <div class="auth-field" id="auth-name-field" hidden>
+          <label for="auth-name" data-i18n="auth.name">Name</label>
+          <input id="auth-name" type="text" autocomplete="name" maxlength="40" placeholder="dein Name" />
+        </div>
+        <div class="auth-field">
+          <label for="auth-email" data-i18n="auth.email">Email</label>
+          <input id="auth-email" type="email" autocomplete="email" placeholder="you@example.com" />
+        </div>
+        <div class="auth-field">
+          <label for="auth-password" data-i18n="auth.password">Passwort</label>
+          <input id="auth-password" type="password" autocomplete="current-password" placeholder="••••••••" />
+        </div>
+        <button id="auth-submit" class="primary auth-submit" type="submit" data-i18n="auth.signinBtn">Anmelden</button>
+        <p id="auth-status" class="auth-status" role="status"></p>
+        <div class="auth-links">
+          <a href="#" id="auth-toggle" class="auth-link" data-i18n="auth.toSignup">Noch kein Konto? Konto erstellen</a>
+          <a href="#" id="auth-forgot" class="auth-link muted" data-i18n="auth.forgot">Passwort vergessen?</a>
+        </div>
+      </form>
+
+      <!-- recovery: after a password-reset email link -->
+      <div data-auth-view="recovery" class="auth-view" hidden>
+        <h2 data-i18n="auth.recoveryHeading">Neues Passwort</h2>
+        <div class="auth-field">
+          <label for="auth-newpw" data-i18n="auth.newPassword">Neues Passwort</label>
+          <input id="auth-newpw" type="password" autocomplete="new-password" placeholder="••••••••" />
+        </div>
+        <button id="auth-newpw-btn" class="primary auth-submit" type="button" data-i18n="auth.newPwSave">Passwort speichern</button>
+        <p id="auth-newpw-status" class="auth-status"></p>
+      </div>
+
+      <!-- pending: signed in but awaiting admin approval -->
+      <div data-auth-view="pending" class="auth-view" hidden>
+        <div class="auth-pending-icon">⏳</div>
+        <h2 data-i18n="auth.pendingTitle">Fast geschafft</h2>
+        <p id="auth-pending-body" class="muted" data-i18n="auth.pendingBody">Dein Konto wird geprüft — der Admin gibt dich frei. Du kommst rein, sobald’s durch ist.</p>
+        <button id="auth-logout" class="copy-btn" type="button" data-i18n="auth.logout">Abmelden</button>
+      </div>
+
+      <div class="auth-langs lang-switch" role="group" aria-label="Language">
+        <button class="lang-btn" data-lang="en" type="button">EN</button>
+        <button class="lang-btn" data-lang="de" type="button">DE</button>
+      </div>
+    </div>
+  </div>
+
   <aside id="bet-slip" class="bet-slip" hidden>
     <header>
       <h4><span data-i18n="bets.slipTitle">Bet Slip</span> <span class="slip-count" id="bet-slip-count">0</span></h4>
@@ -80,6 +142,10 @@
   <div class="container">
     <header class="hero">
       <div class="hero-tools">
+        <div id="account-chip" class="account-chip" hidden>
+          <span id="account-name" class="account-name"></span>
+          <button id="account-logout" class="account-logout" type="button" data-i18n="auth.logout">Abmelden</button>
+        </div>
         <div class="lang-switch" role="group" aria-label="Language">
           <button class="lang-btn active" data-lang="en" type="button">EN</button>
           <button class="lang-btn" data-lang="de" type="button">DE</button>
@@ -236,48 +302,7 @@
         <p class="muted small" data-i18n="friends.intro">Logge dich mit deiner Email ein, erstelle einen Raum oder tritt mit einem Code bei — danach siehst du eure Wetten + Rangliste live.</p>
 
         <div id="friends-auth" class="friends-block">
-          <div id="friends-login" hidden>
-            <p class="muted small" data-i18n="friends.pwHint">Login mit Email + Passwort — du bleibst eingeloggt, auch nach Reload und auf anderen Geräten.</p>
-            <label class="friends-row">
-              <span data-i18n="friends.name">Name</span>
-              <input id="friends-name" type="text" autocomplete="name" maxlength="40" placeholder="dein Name" />
-            </label>
-            <label class="friends-row">
-              <span data-i18n="friends.loginEmail">Email</span>
-              <input id="friends-email" type="email" autocomplete="email" placeholder="you@example.com" />
-            </label>
-            <label class="friends-row">
-              <span data-i18n="friends.password">Passwort</span>
-              <input id="friends-password" type="password" autocomplete="current-password" placeholder="••••••••" />
-            </label>
-            <div class="friends-row">
-              <button id="friends-signin-btn" class="primary" type="button" data-i18n="friends.signin">Anmelden</button>
-              <button id="friends-signup-btn" class="copy-btn" type="button" data-i18n="friends.signup">Mitglied werden</button>
-            </div>
-            <p class="muted small" data-i18n="friends.signupHint">Neu hier? Mit „Mitglied werden“ sendest du eine Anfrage — der Admin gibt dich frei.</p>
-            <details style="margin-top: 12px">
-              <summary class="muted small" data-i18n="friends.altHeader">Andere Optionen</summary>
-              <div class="friends-row" style="margin-top: 8px">
-                <button id="friends-login-btn" class="copy-btn" type="button" data-i18n="friends.loginButton">Magic-Link senden</button>
-                <button id="friends-reset-btn" class="copy-btn" type="button" data-i18n="friends.resetButton">Passwort vergessen?</button>
-              </div>
-            </details>
-            <p id="friends-login-status" class="muted small"></p>
-          </div>
-          <div id="friends-recovery" hidden>
-            <p class="muted small" data-i18n="friends.recoveryHint">Setze ein neues Passwort für deinen Account.</p>
-            <label class="friends-row">
-              <span data-i18n="friends.newPassword">Neues Passwort</span>
-              <input id="friends-newpw" type="password" autocomplete="new-password" placeholder="••••••••" />
-            </label>
-            <button id="friends-newpw-btn" class="primary" type="button" data-i18n="friends.newPwSave">Passwort speichern</button>
-            <p id="friends-newpw-status" class="muted small"></p>
-          </div>
-          <div id="friends-account" hidden>
-            <span class="friends-handle"><b id="friends-user-email"></b></span>
-            <button id="friends-signout" class="copy-btn" type="button" data-i18n="friends.signout">Abmelden</button>
-          </div>
-          <p id="friends-pending" class="muted small" hidden></p>
+          <!-- Login/signup/recovery moved to the full-screen #auth-gate; account/logout to the header. -->
           <div id="friends-admin" hidden></div>
         </div>
 

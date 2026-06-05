@@ -2647,7 +2647,127 @@ function renderRoomRequests(f) {
   }
 }
 
+// ─────────── Full-screen login gate ───────────
+// New presentation layer in front of the existing auth handlers. Decides what
+// the #auth-gate overlay shows (loading / login / signup / recovery / pending)
+// and unlocks the app once the user is approved. No new auth logic — it wires to
+// signInWithPassword / signUpWithPassword / sendPasswordReset / completePasswordReset.
+function renderAuthGate() {
+  const gate = $("#auth-gate");
+  if (!gate) return;
+  const a = t().auth || {};
+  const f = t().friends || {};
+  const chip = $("#account-chip");
+  const setView = (name) => gate.querySelectorAll("[data-auth-view]").forEach((el) => {
+    el.hidden = el.getAttribute("data-auth-view") !== name;
+  });
+  const lock = (on) => {
+    gate.hidden = !on;
+    document.body.classList.toggle("auth-locked", on);
+  };
+
+  // No backend configured (e.g. local/dev) → never lock the user out.
+  if (!state.supabase) { lock(false); if (chip) chip.hidden = true; return; }
+  // Password-recovery link landed → new-password form.
+  if (state.passwordRecovery) { setView("recovery"); lock(true); if (chip) chip.hidden = true; return; }
+
+  // Logged out → login / signup form (toggled via state.authMode).
+  if (!state.supabaseUser) {
+    const signup = state.authMode === "signup";
+    setView("auth");
+    const heading = $("#auth-heading");
+    if (heading) heading.textContent = signup ? (a.signupHeading || "Konto erstellen") : (a.signinHeading || "Anmelden");
+    const nameField = $("#auth-name-field");
+    if (nameField) nameField.hidden = !signup;
+    const submit = $("#auth-submit");
+    if (submit) submit.textContent = signup ? (a.signupBtn || "Konto erstellen") : (a.signinBtn || "Anmelden");
+    const toggle = $("#auth-toggle");
+    if (toggle) toggle.textContent = signup ? (a.toSignin || "Schon dabei? Anmelden") : (a.toSignup || "Noch kein Konto? Konto erstellen");
+    lock(true); if (chip) chip.hidden = true; return;
+  }
+
+  // Logged in but not yet approved (and not admin) → pending screen.
+  if (!isAppApproved() && !isAppAdmin()) {
+    const body = $("#auth-pending-body");
+    if (body) body.textContent = state.profile?.app_status === "rejected"
+      ? (a.rejected || f.rejected || "Dein Zugang wurde abgelehnt.")
+      : (a.pendingBody || f.awaitingApproval || "Warte auf Freigabe durch den Admin.");
+    setView("pending"); lock(true); if (chip) chip.hidden = true; return;
+  }
+
+  // Approved / admin → unlock the app, show the account chip in the header.
+  lock(false);
+  if (chip) {
+    chip.hidden = false;
+    const nameEl = $("#account-name");
+    if (nameEl) nameEl.textContent = state.profile?.display_name || state.supabaseUser.email || state.supabaseUser.id.slice(0, 8);
+  }
+}
+
+function wireAuthGate() {
+  const gate = $("#auth-gate");
+  if (!gate || gate.dataset.wired) return;
+  gate.dataset.wired = "1";
+  if (!state.authMode) state.authMode = "login";
+
+  const status = $("#auth-status");
+  const setStatus = (msg, ok) => {
+    if (!status) return;
+    status.textContent = msg || "";
+    status.classList.toggle("is-error", !!msg && !ok);
+    status.classList.toggle("is-ok", !!ok);
+  };
+
+  const submit = async () => {
+    const email = $("#auth-email")?.value?.trim();
+    const password = $("#auth-password")?.value || "";
+    const name = $("#auth-name")?.value?.trim();
+    if (!email || !password) { setStatus(t().friends?.pwMissing || "Email + Passwort eintragen."); return; }
+    if (state.authMode === "signup") {
+      const r = await signUpWithPassword(email, password, name);
+      setStatus(r.ok ? (t().auth?.signupOk || "Anfrage gesendet — warte auf Freigabe.") : (r.error || "Sign-up fehlgeschlagen."), r.ok);
+    } else {
+      const r = await signInWithPassword(email, password);
+      if (!r.ok) setStatus(r.error || "Login fehlgeschlagen.");
+      // success → onAuthStateChange repaints the gate (unlocks if approved).
+    }
+  };
+
+  $("#auth-form")?.addEventListener("submit", (e) => { e.preventDefault(); submit(); });
+  $("#auth-toggle")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    state.authMode = state.authMode === "signup" ? "login" : "signup";
+    setStatus("");
+    renderAuthGate();
+  });
+  $("#auth-forgot")?.addEventListener("click", async (e) => {
+    e.preventDefault();
+    const email = $("#auth-email")?.value?.trim();
+    if (!email) { setStatus(t().friends?.emailMissing || "Email eintragen."); return; }
+    const r = await sendPasswordReset(email);
+    setStatus(r.ok ? (t().friends?.resetSent || "Reset-Mail gesendet — check deine Inbox.") : (r.error || "Fehler."), r.ok);
+  });
+  $("#auth-newpw-btn")?.addEventListener("click", async () => {
+    const pw = $("#auth-newpw")?.value || "";
+    const s = $("#auth-newpw-status");
+    const r = await completePasswordReset(pw);
+    if (r.ok) { state.passwordRecovery = false; if (s) { s.textContent = ""; s.classList.remove("is-error"); } renderFriends(); }
+    else if (s) { s.textContent = r.error || "Fehler."; s.classList.add("is-error"); }
+  });
+  $("#auth-logout")?.addEventListener("click", supabaseSignOut);
+  $("#account-logout")?.addEventListener("click", supabaseSignOut);
+
+  // Language switch inside the gate → delegate to the header's already-wired lang buttons.
+  gate.querySelectorAll(".auth-langs [data-lang]").forEach((b) => {
+    b.addEventListener("click", () => {
+      document.querySelector(`.hero-tools .lang-btn[data-lang="${b.dataset.lang}"]`)?.click();
+      renderAuthGate();
+    });
+  });
+}
+
 function renderFriends() {
+  renderAuthGate();
   const dict = t();
   const f = dict.friends || {};
   const card = $("#friends-card");
@@ -4502,6 +4622,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     wireRefreshButton();
     wireBetSlip();
     wireFriends();
+    wireAuthGate();
     wirePools();
     wireTabs();
     wireTour();
