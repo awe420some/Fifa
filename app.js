@@ -4645,6 +4645,19 @@ function initTheme() {
     applyTheme(cur === "light" ? "dark" : "light");
   }));
 }
+function applyAccent(name) {
+  const a = ["blue", "violet", "cyan", "pink"].includes(name) ? name : "bbb";
+  if (a === "bbb") document.documentElement.removeAttribute("data-accent");
+  else document.documentElement.setAttribute("data-accent", a);
+  try { localStorage.setItem("wc26_accent", a); } catch {}
+  document.querySelectorAll(".accent-dot").forEach((d) => d.setAttribute("aria-pressed", d.dataset.accent === a ? "true" : "false"));
+}
+function initAccent() {
+  let saved = null;
+  try { saved = localStorage.getItem("wc26_accent"); } catch {}
+  applyAccent(saved || "bbb");
+  document.querySelectorAll(".accent-dot").forEach((d) => d.addEventListener("click", () => applyAccent(d.dataset.accent)));
+}
 
 document.addEventListener("DOMContentLoaded", async () => {
   // Register the PWA service worker so the app is installable + works
@@ -4655,6 +4668,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
   applyI18n();
   initTheme();
+  initAccent();
   $$(".lang-btn").forEach((b) => b.addEventListener("click", () => {
     state.locale = b.dataset.lang;
     document.documentElement.lang = state.locale;

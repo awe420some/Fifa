@@ -24,7 +24,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800;900&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <script>try{var _t=localStorage.getItem('wc26_theme');if(_t==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}</script>
+  <script>try{var _t=localStorage.getItem('wc26_theme');if(_t==='light')document.documentElement.setAttribute('data-theme','light');var _a=localStorage.getItem('wc26_accent');if(_a&&_a!=='bbb')document.documentElement.setAttribute('data-accent',_a);}catch(e){}</script>
   <link rel="stylesheet" href="styles.css" />
 
   <!-- PWA: installable on phone / tablet / desktop home screen -->
@@ -117,6 +117,11 @@
 
       <div class="auth-langs lang-switch" role="group" aria-label="Language">
         <button class="theme-toggle" type="button" title="Hell / Dunkel" aria-label="Theme wechseln">☀</button>
+        <button class="accent-dot" data-accent="bbb" type="button" style="background:#2bea84" title="Grün" aria-label="Grün"></button>
+        <button class="accent-dot" data-accent="blue" type="button" style="background:#3b9dff" title="Blau" aria-label="Blau"></button>
+        <button class="accent-dot" data-accent="violet" type="button" style="background:#9b7cff" title="Violett" aria-label="Violett"></button>
+        <button class="accent-dot" data-accent="cyan" type="button" style="background:#22d3c5" title="Türkis" aria-label="Türkis"></button>
+        <button class="accent-dot" data-accent="pink" type="button" style="background:#ff5db0" title="Pink" aria-label="Pink"></button>
         <button class="lang-btn" data-lang="en" type="button">EN</button>
         <button class="lang-btn" data-lang="de" type="button">DE</button>
       </div>
@@ -146,6 +151,13 @@
     <header class="hero">
       <div class="hero-tools">
         <button id="theme-toggle" class="theme-toggle" type="button" title="Hell / Dunkel" aria-label="Theme wechseln">☀</button>
+        <span class="accent-dots" role="group" aria-label="Akzentfarbe">
+          <button class="accent-dot" data-accent="bbb" type="button" style="background:#2bea84" title="Grün" aria-label="Grün"></button>
+          <button class="accent-dot" data-accent="blue" type="button" style="background:#3b9dff" title="Blau" aria-label="Blau"></button>
+          <button class="accent-dot" data-accent="violet" type="button" style="background:#9b7cff" title="Violett" aria-label="Violett"></button>
+          <button class="accent-dot" data-accent="cyan" type="button" style="background:#22d3c5" title="Türkis" aria-label="Türkis"></button>
+          <button class="accent-dot" data-accent="pink" type="button" style="background:#ff5db0" title="Pink" aria-label="Pink"></button>
+        </span>
         <div id="account-chip" class="account-chip" hidden>
           <span id="account-name" class="account-name"></span>
           <button id="account-logout" class="account-logout" type="button" data-i18n="auth.logout">Abmelden</button>
