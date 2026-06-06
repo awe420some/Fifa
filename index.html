@@ -24,6 +24,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800;900&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <script>try{var _t=localStorage.getItem('wc26_theme');if(_t==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}</script>
   <link rel="stylesheet" href="styles.css" />
 
   <!-- PWA: installable on phone / tablet / desktop home screen -->
@@ -115,6 +116,7 @@
       </div>
 
       <div class="auth-langs lang-switch" role="group" aria-label="Language">
+        <button class="theme-toggle" type="button" title="Hell / Dunkel" aria-label="Theme wechseln">☀</button>
         <button class="lang-btn" data-lang="en" type="button">EN</button>
         <button class="lang-btn" data-lang="de" type="button">DE</button>
       </div>
@@ -143,6 +145,7 @@
   <div class="container">
     <header class="hero">
       <div class="hero-tools">
+        <button id="theme-toggle" class="theme-toggle" type="button" title="Hell / Dunkel" aria-label="Theme wechseln">☀</button>
         <div id="account-chip" class="account-chip" hidden>
           <span id="account-name" class="account-name"></span>
           <button id="account-logout" class="account-logout" type="button" data-i18n="auth.logout">Abmelden</button>

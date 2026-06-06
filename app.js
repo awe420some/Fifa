@@ -4627,6 +4627,25 @@ function fireConfetti() {
   frame();
 }
 
+// ─────────── Theme (dark default, light opt-in, persisted) ───────────
+function applyTheme(theme) {
+  const t = theme === "light" ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", t);
+  try { localStorage.setItem("wc26_theme", t); } catch {}
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute("content", t === "light" ? "#eef1f6" : "#05080d");
+  document.querySelectorAll(".theme-toggle").forEach((b) => { b.textContent = t === "light" ? "☾" : "☀"; });
+}
+function initTheme() {
+  let saved = null;
+  try { saved = localStorage.getItem("wc26_theme"); } catch {}
+  applyTheme(saved === "light" ? "light" : "dark");   // default dark; light is opt-in
+  document.querySelectorAll(".theme-toggle").forEach((b) => b.addEventListener("click", () => {
+    const cur = document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";
+    applyTheme(cur === "light" ? "dark" : "light");
+  }));
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   // Register the PWA service worker so the app is installable + works
   // offline. Fail-safe: any error (private mode, SW disabled) is swallowed
@@ -4635,6 +4654,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     navigator.serviceWorker.register("./service-worker.js").catch(() => {});
   }
   applyI18n();
+  initTheme();
   $$(".lang-btn").forEach((b) => b.addEventListener("click", () => {
     state.locale = b.dataset.lang;
     document.documentElement.lang = state.locale;

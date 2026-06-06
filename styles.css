@@ -1184,6 +1184,51 @@ html { scroll-behavior: smooth; scrollbar-width: thin; scrollbar-color: rgba(255
 section[data-tab]:not(.tab-hidden) { animation: tab-in var(--t-base) var(--ease-out); }
 @keyframes tab-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
+/* ─────────── Light theme (opt-in via the header toggle) ─────────── */
+html[data-theme="light"] {
+  --bg-0: #eef1f6; --bg-1: #ffffff; --bg-2: #f3f6fa;
+  --glass: rgba(255, 255, 255, 0.72); --glass-2: rgba(255, 255, 255, 0.92);
+  --stroke: rgba(12, 22, 34, 0.12); --stroke-soft: rgba(12, 22, 34, 0.07);
+  --line: var(--stroke-soft); --line-strong: var(--stroke);
+  --ink: #131c28; --text: var(--ink); --muted: #5c6877;
+  --accent: #0ea968; --accent-2: #cf8f12; --accent-warm: var(--accent-2);
+  --accent-3: #e23d5b; --accent-danger: var(--accent-3);
+  --inset-hi: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  --shadow-sm: 0 2px 8px rgba(20, 30, 50, 0.08);
+  --shadow-md: 0 12px 28px rgba(20, 30, 50, 0.12);
+  --shadow-lg: 0 22px 48px rgba(20, 30, 50, 0.16);
+  --glow-accent: 0 0 22px rgba(14, 169, 104, 0.20);
+  --glow-gold:   0 0 22px rgba(207, 143, 18, 0.20);
+  --grad-accent: linear-gradient(135deg, #2bea84 0%, #0ea968 100%);
+  --grad-gold:   linear-gradient(135deg, #ffd87a 0%, #e0a32a 100%);
+  --grad-card:   linear-gradient(152deg, #ffffff 0%, #f3f6fa 100%);
+}
+html[data-theme="light"] body::before {
+  background:
+    radial-gradient(760px 500px at 88% -8%, rgba(43, 234, 132, 0.12), transparent 60%),
+    radial-gradient(660px 560px at 5% 12%, rgba(20, 160, 200, 0.10), transparent 58%),
+    radial-gradient(820px 640px at 75% 112%, rgba(123, 98, 255, 0.07), transparent 60%),
+    var(--bg-0);
+}
+html[data-theme="light"] .auth-gate-bg {
+  background:
+    radial-gradient(760px 500px at 85% -8%, rgba(43, 234, 132, 0.14), transparent 60%),
+    radial-gradient(660px 560px at 5% 12%, rgba(20, 160, 200, 0.10), transparent 58%),
+    radial-gradient(820px 640px at 75% 112%, rgba(123, 98, 255, 0.07), transparent 60%),
+    var(--bg-0);
+}
+html[data-theme="light"] .tab-strip { background: rgba(255, 255, 255, 0.72); border-bottom: 1px solid var(--stroke-soft); }
+html[data-theme="light"] table tbody tr:nth-child(even) { background: rgba(12, 22, 34, 0.03); }
+
+/* Theme toggle button (header + login gate) */
+.theme-toggle {
+  background: transparent; border: 1px solid var(--stroke); color: var(--muted);
+  width: 32px; height: 32px; border-radius: 8px; cursor: pointer;
+  font-size: 0.95rem; line-height: 1; display: inline-flex; align-items: center; justify-content: center;
+  transition: color var(--t-fast), border-color var(--t-fast), background var(--t-fast);
+}
+.theme-toggle:hover { color: var(--ink); border-color: var(--accent); }
+
 @media (max-width: 480px) {
   .auth-card { padding: var(--s-5) var(--s-4); }
   .account-name { max-width: 84px; }
