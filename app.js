@@ -2699,6 +2699,8 @@ function renderAuthGate() {
     if (submit) submit.textContent = signup ? (a.signupBtn || "Konto erstellen") : (a.signinBtn || "Anmelden");
     const toggle = $("#auth-toggle");
     if (toggle) toggle.textContent = signup ? (a.toSignin || "Schon dabei? Anmelden") : (a.toSignup || "Noch kein Konto? Konto erstellen");
+    // One-time autofocus on the email field for a normal login feel.
+    if (!state._authFocused) { state._authFocused = true; setTimeout(() => { const em = $("#auth-email"); if (em && !em.value) em.focus(); }, 60); }
     lock(true); if (chip) chip.hidden = true; return;
   }
 
@@ -2744,13 +2746,20 @@ function wireAuthGate() {
     const password = $("#auth-password")?.value || "";
     const name = $("#auth-name")?.value?.trim();
     if (!email || !password) { setStatus(t().friends?.pwMissing || "Email + Passwort eintragen."); return; }
-    if (state.authMode === "signup") {
-      const r = await signUpWithPassword(email, password, name);
-      setStatus(r.ok ? (t().auth?.signupOk || "Anfrage gesendet — warte auf Freigabe.") : (r.error || "Sign-up fehlgeschlagen."), r.ok);
-    } else {
-      const r = await signInWithPassword(email, password);
-      if (!r.ok) setStatus(r.error || "Login fehlgeschlagen.");
-      // success → onAuthStateChange repaints the gate (unlocks if approved).
+    const btn = $("#auth-submit");
+    const label = btn ? btn.textContent : "";
+    if (btn) { btn.disabled = true; btn.textContent = "…"; }
+    try {
+      if (state.authMode === "signup") {
+        const r = await signUpWithPassword(email, password, name);
+        setStatus(r.ok ? (t().auth?.signupOk || "Anfrage gesendet — warte auf Freigabe.") : (r.error || "Sign-up fehlgeschlagen."), r.ok);
+      } else {
+        const r = await signInWithPassword(email, password);
+        if (!r.ok) setStatus(r.error || "Login fehlgeschlagen.");
+        // success → onAuthStateChange repaints the gate (unlocks if approved).
+      }
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = label; }
     }
   };
 
@@ -2902,7 +2911,7 @@ function renderFriends() {
             return `<span class="${cls}" title="${escape(b.label)}">${ico} ${Number(b.odds).toFixed(2)}</span>`;
           }).join(" ");
           return `<tr>
-            <td>${i + 1}</td>
+            <td>${i < 3 ? ["🥇", "🥈", "🥉"][i] : (i + 1) + "."}</td>
             <td><b>${escape(r.nick)}</b></td>
             <td>${r.total}</td>
             <td>${hit}</td>
@@ -4638,6 +4647,23 @@ document.addEventListener("DOMContentLoaded", async () => {
     renderDistribution();
   });
   setupScenarios();
+
+  // Resolve the login gate IMMEDIATELY, in parallel with the heavy forecast
+  // compute below — the login screen must never wait behind the Monte-Carlo.
+  wireAuthGate();
+  bootstrapMultiplayer();
+  // Safety net: never let the gate hang on "Lädt…" (slow init / stalled profile).
+  setTimeout(() => {
+    const g = document.querySelector("#auth-gate");
+    if (!g || g.hidden) return;
+    const loadingEl = g.querySelector('[data-auth-view="loading"]');
+    if (!loadingEl || loadingEl.hidden) return;
+    state.supabaseInitDone = true;
+    renderAuthGate();
+    const stuck = loadingEl && !loadingEl.hidden;
+    if (stuck && !g.hidden) { g.hidden = true; document.body.classList.remove("auth-locked"); }
+  }, 8000);
+
   requestAnimationFrame(async () => {
     await new Promise((r) => setTimeout(r, 30));
     await bootstrap();
@@ -4647,7 +4673,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     wireRefreshButton();
     wireBetSlip();
     wireFriends();
-    wireAuthGate();
     wirePools();
     wireTabs();
     wireTour();
@@ -4655,22 +4680,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     switchTab(state.activeTab);
     maybeStartTour();
     maybeShowIosInstallBanner();
-    // Multiplayer is opt-in via /api/config.js; the call no-ops if the
-    // Supabase env vars aren't set and the friends-card stays hidden.
-    bootstrapMultiplayer();
-    // Safety net: never let the login gate hang on "Lädt…". If Supabase is slow
-    // to initialize (cold CDN / flaky network) or a profile fetch stalls, resolve
-    // the gate after a few seconds — show login if the client came up, else fail open.
-    setTimeout(() => {
-      const g = document.querySelector("#auth-gate");
-      if (!g || g.hidden) return;
-      const loadingEl = g.querySelector('[data-auth-view="loading"]');
-      if (!loadingEl || loadingEl.hidden) return;   // already moved past the spinner
-      state.supabaseInitDone = true;
-      renderAuthGate();
-      const stuck = loadingEl && !loadingEl.hidden;
-      if (stuck && !g.hidden) { g.hidden = true; document.body.classList.remove("auth-locked"); }
-    }, 8000);
     startLivePollingIfActive();
     // Persist the current snapshot so the NEXT visit can diff against it.
     persistPrev(cloneCurrentSnapshot());

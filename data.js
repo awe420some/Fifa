@@ -592,7 +592,8 @@ export const I18N = {
     auth: {
       loading: "Loading…",
       title: "World Cup 2026",
-      claim: "Your account for the WC 2026 prediction round.",
+      tagline: "WC 2026 · Prediction pool",
+      claim: "Sign in to join the round.",
       signinHeading: "Sign in",
       signupHeading: "Create account",
       name: "Name",
@@ -943,7 +944,8 @@ export const I18N = {
     auth: {
       loading: "Lädt…",
       title: "World Cup 2026",
-      claim: "Dein Account für die WM-2026-Tipprunde.",
+      tagline: "WM 2026 · Tipprunde",
+      claim: "Melde dich an, um mitzutippen.",
       signinHeading: "Anmelden",
       signupHeading: "Konto erstellen",
       name: "Name",
