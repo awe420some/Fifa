@@ -1,14 +1,14 @@
 {
-  "name": "World Cup 2026 — Data Forecast",
-  "short_name": "WC 2026",
-  "description": "Elo + Monte-Carlo forecast for the 2026 FIFA World Cup, with backtest, market comparison and per-match player predictions.",
+  "name": "Brian Bet Brothers",
+  "short_name": "BBB",
+  "description": "Brian Bet Brothers — die WM-2026-Tipprunde mit Freunden: Wetten, Pools, Live-Rangliste.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait-primary",
-  "theme_color": "#00d97e",
-  "background_color": "#0a1a14",
-  "lang": "en",
+  "theme_color": "#2bea84",
+  "background_color": "#05080d",
+  "lang": "de",
   "categories": ["sports", "entertainment"],
   "icons": [
     {

@@ -592,7 +592,7 @@ export const I18N = {
     auth: {
       loading: "Loading…",
       title: "World Cup 2026",
-      tagline: "WC 2026 · Prediction pool",
+      tagline: "Brian Bet Brothers",
       claim: "Sign in to join the round.",
       signinHeading: "Sign in",
       signupHeading: "Create account",
@@ -944,7 +944,7 @@ export const I18N = {
     auth: {
       loading: "Lädt…",
       title: "World Cup 2026",
-      tagline: "WM 2026 · Tipprunde",
+      tagline: "Brian Bet Brothers",
       claim: "Melde dich an, um mitzutippen.",
       signinHeading: "Anmelden",
       signupHeading: "Konto erstellen",

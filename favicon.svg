@@ -1,16 +1,17 @@
-<svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#00d97e"/>
-      <stop offset="1" stop-color="#ffd166"/>
+    <linearGradient id="bbbBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0d131c"/><stop offset="1" stop-color="#05080d"/>
+    </linearGradient>
+    <radialGradient id="bbbGlow" cx="0.5" cy="0.32" r="0.72">
+      <stop offset="0" stop-color="#2bea84" stop-opacity="0.4"/><stop offset="1" stop-color="#2bea84" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="bbbInk" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a6ff45"/><stop offset="0.55" stop-color="#2bea84"/><stop offset="1" stop-color="#ffcf45"/>
     </linearGradient>
   </defs>
-  <rect width="64" height="64" rx="14" fill="#0a1a14"/>
-  <g fill="url(#g)">
-    <path d="M18 14h28v18a14 14 0 0 1-28 0z"/>
-    <rect x="30" y="36" width="4" height="10"/>
-    <rect x="22" y="46" width="20" height="4" rx="1"/>
-  </g>
-  <path d="M14 18 Q8 18 8 24 Q8 30 16 32" stroke="#00d97e" stroke-width="2" fill="none"/>
-  <path d="M50 18 Q56 18 56 24 Q56 30 48 32" stroke="#00d97e" stroke-width="2" fill="none"/>
+  <rect width="512" height="512" rx="108" fill="url(#bbbBg)"/>
+  <rect width="512" height="512" rx="108" fill="url(#bbbGlow)"/>
+  <circle cx="146" cy="150" r="26" fill="#2bea84"/>
+  <text x="256" y="378" text-anchor="middle" font-family="Archivo, system-ui, 'Arial Black', sans-serif" font-weight="900" font-size="330" fill="url(#bbbInk)">B</text>
 </svg>
