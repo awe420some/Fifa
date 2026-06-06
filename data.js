@@ -449,7 +449,7 @@ export const I18N = {
     },
     tour: {
       next: "Next", prev: "Back", skip: "Skip", done: "Done", restart: "Restart tour",
-      step1: { title: "Welcome", body: "This is a virtual betting simulator on top of the WC 2026 model. 60 seconds and you're set." },
+      step1: { title: "Welcome to BBB", body: "Brian Bet Brothers — your WC 2026 prediction round: bets, pools, a live leaderboard. 60 seconds and you're set." },
       step2: { title: "Tabs", body: "Navigate between Overview, Stages, Markets, Schedule, Players, Bets & Methodology — all in one page." },
       step3: { title: "Top 3", body: "The model's current top-3 favourites with championship probability. Numbers update as the data refreshes." },
       step4: { title: "Schedule", body: "Click any match here to see who's likely to score, expected goals, and a Wetten block with bet-ready odds." },
@@ -801,7 +801,7 @@ export const I18N = {
     },
     tour: {
       next: "Weiter", prev: "Zurück", skip: "Überspringen", done: "Fertig", restart: "Tour neu starten",
-      step1: { title: "Willkommen", body: "Wettsimulation auf Basis des WM-2026-Modells. In 60 Sekunden bist du durch." },
+      step1: { title: "Willkommen bei BBB", body: "Brian Bet Brothers — eure WM-2026-Tipprunde: Wetten, Pools, Live-Rangliste. In 60 Sekunden bist du durch." },
       step2: { title: "Tabs", body: "Navigation zwischen Übersicht, Phasen, Märkten, Spielplan, Spielern, Wetten & Methodik — alles auf einer Seite." },
       step3: { title: "Top 3", body: "Die aktuellen Top-3-Favoriten des Modells mit Champion-Wahrscheinlichkeit. Updates wenn Daten neu reinkommen." },
       step4: { title: "Spielplan", body: "Klick auf ein Match — siehst, wer wahrscheinlich trifft, erwartete Tore und einen Wetten-Block mit Quoten." },
