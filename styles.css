@@ -220,7 +220,7 @@ header.hero::before {
 /* Distribution */
 .dist-row {
   display: grid; grid-template-columns: 140px 1fr 60px auto;
-  gap: 8px; align-items: center; padding: 4px 0;
+  gap: 8px; align-items: center; padding: 7px 0;
   border-bottom: 1px solid rgba(255,255,255,0.04);
   font-size: 0.88rem;
 }
@@ -240,7 +240,7 @@ header.hero::before {
 /* Market vs model */
 .market-head {
   display: grid; grid-template-columns: 140px 1fr 1fr;
-  gap: 8px; font-size: 0.75rem; padding-bottom: 4px;
+  gap: 8px; font-size: 0.78rem; padding-bottom: 8px;
   text-transform: uppercase; letter-spacing: 0.5px;
 }
 .legend-dot {
@@ -251,7 +251,7 @@ header.hero::before {
 .legend-market { background: var(--accent-2); }
 .market-row {
   display: grid; grid-template-columns: 140px 1fr; gap: 8px;
-  align-items: center; padding: 4px 0;
+  align-items: center; padding: 7px 0;
   border-bottom: 1px solid rgba(255,255,255,0.04);
   font-size: 0.88rem;
 }
@@ -696,7 +696,7 @@ footer.foot {
 .bets-block summary { padding: 6px 10px; cursor: pointer; font-weight: 600; color: var(--ink); user-select: none; }
 .bets-block summary:hover { background: rgba(0,217,126,0.06); }
 .bets-table { width: 100%; border-collapse: collapse; font-size: 0.92rem; margin: 4px 0 8px; }
-.bets-table th, .bets-table td { padding: 4px 8px; text-align: left; border-bottom: 1px solid rgba(127,168,150,0.10); }
+.bets-table th, .bets-table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid rgba(127,168,150,0.10); }
 .bets-table th { font-weight: 600; color: var(--muted); font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.04em; }
 .bets-table tbody tr:hover { background: rgba(0,217,126,0.03); }
 
@@ -939,36 +939,40 @@ table tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.02); }
 .tour-overlay > * { pointer-events: auto; }
 .tour-backdrop {
   position: absolute; inset: 0;
-  background: rgba(0, 0, 0, 0.55);
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px);
 }
 .tour-spotlight {
   position: absolute;
   border-radius: var(--r-md);
   box-shadow:
     0 0 0 9999px rgba(0, 0, 0, 0.55),
-    0 0 0 3px rgba(0, 217, 126, 0.65),
-    0 0 30px rgba(0, 217, 126, 0.35);
+    0 0 0 3px rgba(43, 234, 132, 0.7),
+    0 0 30px rgba(43, 234, 132, 0.4);
   pointer-events: none;
   transition: top var(--t-base), left var(--t-base), width var(--t-base), height var(--t-base);
 }
 .tour-bubble {
   position: absolute;
-  background: var(--bg-1);
-  border: 1px solid var(--accent);
-  border-radius: var(--r-lg);
-  padding: var(--s-4);
-  box-shadow: var(--shadow-lg);
+  background: var(--glass-2);
+  backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
+  border: 1px solid var(--stroke);
+  border-radius: var(--r-xl);
+  padding: var(--s-5);
+  box-shadow: var(--shadow-lg), var(--inset-hi);
   color: var(--ink);
 }
-.tour-bubble h4 { margin: 0 0 var(--s-2); color: var(--accent-2); font-size: 1.05rem; }
+.tour-bubble h4 { font-family: var(--font-display); margin: 0 0 var(--s-2); color: var(--accent-2); font-size: 1.1rem; font-weight: 800; }
 .tour-bubble p { margin: 0 0 var(--s-3); line-height: 1.5; font-size: 0.92rem; }
 .tour-buttons { display: flex; gap: var(--s-2); justify-content: flex-end; align-items: center; flex-wrap: wrap; }
 .tour-buttons .primary {
-  background: var(--accent); color: var(--bg-0);
+  background: var(--grad-accent); color: #04130c;
   border: 0; padding: var(--s-2) var(--s-4); border-radius: var(--r-md);
   font: inherit; font-weight: 700; cursor: pointer;
+  box-shadow: var(--glow-accent);
+  transition: transform var(--t-fast) var(--ease-out), filter var(--t-fast);
 }
-.tour-buttons .primary:hover { filter: brightness(1.05); }
+.tour-buttons .primary:hover { filter: brightness(1.05); transform: translateY(-1px); }
 .tour-step { margin: 0 0 var(--s-1); letter-spacing: 0.08em; text-transform: uppercase; font-size: 0.72rem; }
 
 /* ─────────── iOS install banner (PR Mobile) ─────────── */
@@ -1166,6 +1170,19 @@ html { scroll-behavior: smooth; scrollbar-width: thin; scrollbar-color: rgba(255
 ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.14); border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.24); background-clip: padding-box; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* Empty states — friendlier than a lone muted line */
+.empty-state {
+  text-align: center; color: var(--muted); font-size: 0.92rem;
+  padding: var(--s-6) var(--s-4); margin: var(--s-3) 0;
+  border: 1px dashed var(--stroke); border-radius: var(--r-lg);
+  background: rgba(255, 255, 255, 0.02);
+}
+.empty-state::before { content: "⚽"; display: block; font-size: 1.9rem; margin-bottom: var(--s-2); opacity: 0.55; }
+
+/* Tab-switch micro-animation (respects prefers-reduced-motion via the guard above) */
+section[data-tab]:not(.tab-hidden) { animation: tab-in var(--t-base) var(--ease-out); }
+@keyframes tab-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
 @media (max-width: 480px) {
   .auth-card { padding: var(--s-5) var(--s-4); }

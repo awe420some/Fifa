@@ -2166,7 +2166,7 @@ function renderWallet() {
   if ($("#wallet-hitrate")) $("#wallet-hitrate").textContent = decided ? `${((wins / decided) * 100).toFixed(0)}%` : "—";
   if ($("#wallet-edge")) $("#wallet-edge").textContent = edgeCount ? `${((edgeSum / edgeCount) * 100).toFixed(1)}%` : "—";
   const renderRows = (list, isHistory) => {
-    if (!list.length) return `<p class="muted small">${escape(w.empty || "Noch keine Wetten.")}</p>`;
+    if (!list.length) return `<p class="empty-state">${escape(w.empty || "Noch keine Wetten.")}</p>`;
     return `<table class="wallet-table">
       <thead><tr>
         <th>${escape(w.colPlaced || "Platziert")}</th>
@@ -2606,7 +2606,7 @@ function makeEl(tag, opts = {}, kids = []) {
 
 // Replace an element's content with a single muted note paragraph.
 function setNote(el, text) {
-  if (el) el.replaceChildren(makeEl("p", { class: "muted small", text }));
+  if (el) el.replaceChildren(makeEl("p", { class: "empty-state", text }));
 }
 
 // One approve/reject row used by both the admin + room-owner panels.
