@@ -284,14 +284,14 @@ header.hero::before {
   margin: 0 0 6px; font-size: 0.8rem; letter-spacing: 1px;
   color: var(--accent-2); text-transform: uppercase;
 }
-.group-card table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+.group-card table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
 .group-card th {
-  color: var(--muted); font-weight: 500; text-align: left;
-  padding: 3px 4px; border-bottom: 1px solid var(--line);
-  font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--muted); font-weight: 600; text-align: left;
+  padding: 6px 6px; border-bottom: 1px solid var(--line);
+  font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.5px;
 }
 .group-card td {
-  padding: 4px 4px;
+  padding: 7px 6px;
   border-bottom: 1px solid rgba(255,255,255,0.04);
   font-variant-numeric: tabular-nums;
 }
@@ -898,6 +898,8 @@ table tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.02); }
   color: var(--accent-2); font-weight: 800;
   text-shadow: 0 0 12px rgba(255, 209, 102, 0.45);
 }
+/* "Your" row in pool standings + leaderboard — on-brand green highlight */
+.pool-me-row { background: rgba(43, 234, 132, 0.08); box-shadow: inset 3px 0 0 var(--accent); }
 .pool-picks { margin-top: var(--s-3); }
 .pool-picks h5 {
   margin: 0 0 var(--s-2); font-size: 0.82rem; letter-spacing: 0.06em;

@@ -3414,7 +3414,7 @@ function renderPools() {
             handles.revolut && `<a class="pay-link" href="${PAYMENT_LINKS.revolut(pool.buy_in, handles.revolut)}" target="_blank" rel="noopener">Revolut</a>`,
             handles.sepa_iban && `<button class="pay-link" data-copy-iban="${escape(handles.sepa_iban)}" type="button">IBAN</button>`,
           ].filter(Boolean).join(" · ") : "—";
-          const meRow = m.user_id === state.supabaseUser.id ? ' style="background:rgba(127,127,127,.12)"' : "";
+          const meRow = m.user_id === state.supabaseUser.id ? ' class="pool-me-row"' : "";
           return `<tr${meRow}>
             <td>${rank}</td>
             <td><b>${nick}</b></td>
