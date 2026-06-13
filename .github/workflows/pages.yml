@@ -1,9 +1,9 @@
 name: Deploy to GitHub Pages
 
 on:
-  push:
-    branches:
-      - main
+  # Auto-Deploy auf Push deaktiviert — Vercel (fifa-orpin.vercel.app) ist jetzt
+  # die primäre Plattform (Login + Live-Mode brauchen die /api Edge Functions,
+  # die GitHub Pages nicht ausfuehren kann). Nur noch manuell als Fallback.
   workflow_dispatch:
 
 permissions:
