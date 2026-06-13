@@ -1183,7 +1183,7 @@ html { scroll-behavior: smooth; scrollbar-width: thin; scrollbar-color: rgba(255
 .empty-state::before { content: "⚽"; display: block; font-size: 1.9rem; margin-bottom: var(--s-2); opacity: 0.55; }
 
 /* Tab-switch micro-animation (respects prefers-reduced-motion via the guard above) */
-section[data-tab]:not(.tab-hidden) { animation: tab-in var(--t-base) var(--ease-out); }
+section[data-tab]:not(.tab-hidden) { animation: tab-in var(--t-base) var(--ease-out) both; }
 @keyframes tab-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
 /* ─────────── Light theme (opt-in via the header toggle) ─────────── */
