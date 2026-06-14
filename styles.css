@@ -691,6 +691,20 @@ footer.foot {
 .live-score { font-weight: 800; font-size: 1.15rem; }
 @keyframes live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 
+/* Forecast (predicted scoreline) — the model's "Prognose 2:1" */
+.match-row .match-lambdas { white-space: nowrap; }
+.pred-pill { font-weight: 800; color: var(--accent-2, #00d97e); font-variant-numeric: tabular-nums; }
+.pred-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 0.85rem; font-weight: 600; color: var(--ink);
+  background: rgba(var(--accent-rgb), 0.12);
+  border: 1px solid rgba(var(--accent-rgb), 0.32);
+  border-radius: 999px; padding: 2px 10px;
+}
+.pred-chip b { color: var(--accent-2, #00d97e); font-weight: 800; font-variant-numeric: tabular-nums; }
+.score-sep { color: var(--muted); }
+.detail-list .pred-row b { color: var(--accent-2, #00d97e); font-weight: 800; font-variant-numeric: tabular-nums; }
+
 /* ─────────── Bet simulator ─────────── */
 
 .bets-block { background: linear-gradient(180deg, rgba(var(--accent-rgb),0.04), transparent); }

@@ -433,6 +433,7 @@ export const I18N = {
     stageLabels: { group: "Group", R32: "Round of 32", R16: "Round of 16", QF: "Quarter-final", SF: "Semi-final", third: "3rd-place play-off", final: "Final" },
     matchExp: {
       outcome: "Match outcome",
+      predicted: "Forecast",
       draw: "Draw",
       expGoals: "Expected goals",
       totalGoals: "Total expected",
@@ -785,6 +786,7 @@ export const I18N = {
     stageLabels: { group: "Gruppe", R32: "Sechzehntelfinale", R16: "Achtelfinale", QF: "Viertelfinale", SF: "Halbfinale", third: "Spiel um Platz 3", final: "Finale" },
     matchExp: {
       outcome: "Match-Ergebnis",
+      predicted: "Prognose",
       draw: "Unentschieden",
       expGoals: "Erwartete Tore",
       totalGoals: "Gesamt erwartet",

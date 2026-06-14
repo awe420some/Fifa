@@ -1040,6 +1040,14 @@ function slotLabel(slot) {
 }
 
 // Compact one-line summary of a match used in lists.
+// The model's single best scoreline guess for a matchup: each team's
+// expected goals (λ) rounded to the nearest whole goal. This is the
+// intuitive "Prognose 2:1" — it tracks the result's magnitude, unlike the
+// raw decimal λ which never reads like an actual score.
+function forecastScore(lambdaA, lambdaB) {
+  return { a: Math.round(lambdaA), b: Math.round(lambdaB) };
+}
+
 function matchSummaryLine(match) {
   const fc = state.matchForecasts?.get(match.matchNo);
   const teams = (() => {
@@ -1053,10 +1061,14 @@ function matchSummaryLine(match) {
     }
     return `${escape(slotLabel(match.teamA))} – ${escape(slotLabel(match.teamB))}`;
   })();
-  const lambdas = fc?.matchups?.[0] ? `${fc.matchups[0].lambdaA.toFixed(1)}–${fc.matchups[0].lambdaB.toFixed(1)}` : "—";
+  const primaryFc = fc?.matchups?.[0];
+  const lambdas = primaryFc ? `${primaryFc.lambdaA.toFixed(1)}–${primaryFc.lambdaB.toFixed(1)}` : "—";
+  const predScore = primaryFc
+    ? (() => { const s = forecastScore(primaryFc.lambdaA, primaryFc.lambdaB); return `${s.a}:${s.b}`; })()
+    : null;
   const d = new Date(match.kickoffUTC);
   const dateStr = isNaN(d.getTime()) ? match.date : d.toISOString().slice(5, 10) + " " + d.toISOString().slice(11, 16) + "Z";
-  return { teams, lambdas, dateStr };
+  return { teams, lambdas, dateStr, predScore };
 }
 
 function renderGroupMatchList(letter) {
@@ -1073,7 +1085,7 @@ function renderGroupMatchList(letter) {
       <div class="match-row${open ? " expanded" : ""}" data-match-no="${m.matchNo}">
         <span class="match-date">${escape(sum.dateStr)}</span>
         <span class="match-teams">${sum.teams}</span>
-        <span class="match-lambdas muted small">λ ${escape(sum.lambdas)}</span>
+        <span class="match-lambdas">${sum.predScore ? `<b class="pred-pill">${sum.predScore}</b>` : ""}<span class="muted small"> λ ${escape(sum.lambdas)}</span></span>
       </div>
       ${open ? `<div class="match-panel">${renderMatchPanel(m.matchNo)}</div>` : ""}
     `;
@@ -1096,6 +1108,10 @@ function renderMatchPanel(matchNo) {
   // Primary matchup + alternatives
   const primary = fc.matchups[0];
   const alts = fc.matchups.slice(1);
+  // Model's predicted scoreline ("Prognose 2:1") — shown next to the live
+  // score and at the top of the outcome block.
+  const ps = forecastScore(primary.lambdaA, primary.lambdaB);
+  const predChip = `<span class="pred-chip">${escape(ex.predicted || "Forecast")} <b>${ps.a}:${ps.b}</b></span>`;
   // Header
   const d = new Date(match.kickoffUTC);
   const dateStr = isNaN(d.getTime()) ? match.date : d.toISOString().slice(0, 16).replace("T", " ") + " UTC";
@@ -1108,19 +1124,21 @@ function renderMatchPanel(matchNo) {
   // Live / final score badge, populated once real data flows from /api/live
   // (the matchNo map joins provider IDs to our internal schedule IDs).
   const liveMatch = getLiveForSchedule(matchNo);
-  let liveBadge = "";
-  if (liveMatch && (liveMatch.scoreA != null && liveMatch.scoreB != null)) {
-    if (liveMatch.status === "live") {
-      liveBadge = `<p class="live-line"><span class="live-badge">● ${escape(ex.live || "LIVE")}${liveMatch.minute ? " " + liveMatch.minute + "'" : ""}</span><span class="live-score">${liveMatch.scoreA}–${liveMatch.scoreB}</span></p>`;
-    } else if (liveMatch.status === "finished") {
-      liveBadge = `<p class="live-line"><span class="final-badge">${escape(ex.fulltime || "FT")}</span><span class="live-score">${liveMatch.scoreA}–${liveMatch.scoreB}</span></p>`;
-    }
+  const hasScore = liveMatch && liveMatch.scoreA != null && liveMatch.scoreB != null;
+  let liveBadge;
+  if (hasScore && liveMatch.status === "live") {
+    liveBadge = `<p class="live-line"><span class="live-badge">● ${escape(ex.live || "LIVE")}${liveMatch.minute ? " " + liveMatch.minute + "'" : ""}</span><span class="live-score">${liveMatch.scoreA}–${liveMatch.scoreB}</span><span class="score-sep">·</span>${predChip}</p>`;
+  } else if (hasScore && liveMatch.status === "finished") {
+    liveBadge = `<p class="live-line"><span class="final-badge">${escape(ex.fulltime || "FT")}</span><span class="live-score">${liveMatch.scoreA}–${liveMatch.scoreB}</span><span class="score-sep">·</span>${predChip}</p>`;
+  } else {
+    liveBadge = `<p class="live-line">${predChip}</p>`;
   }
   // Outcome block
   const outcomeBlock = `
     <div class="detail-block">
       <h5>${escape(ex.outcome || "Match outcome")}</h5>
       <ul class="detail-list">
+        <li class="pred-row"><span>${escape(ex.predicted || "Forecast")}</span><b>${ps.a}:${ps.b}</b></li>
         <li><span>${escape(teamName(primary.teamA))}</span><b>${pct(primary.winA, 0)}</b></li>
         <li><span>${escape(ex.draw || "Draw")}</span><b>${pct(primary.draw, 0)}</b></li>
         <li><span>${escape(teamName(primary.teamB))}</span><b>${pct(primary.winB, 0)}</b></li>
@@ -1301,7 +1319,7 @@ function renderScheduleSection() {
         <span class="match-date">${escape(sum.dateStr)}</span>
         <span class="match-stage muted small">${escape(stageLabel)}${m.group ? " · " + m.group : ""}</span>
         <span class="match-teams">${sum.teams}</span>
-        <span class="match-lambdas muted small">λ ${escape(sum.lambdas)}</span>
+        <span class="match-lambdas">${sum.predScore ? `<b class="pred-pill">${sum.predScore}</b>` : ""}<span class="muted small"> λ ${escape(sum.lambdas)}</span></span>
       </div>
       ${open ? `<div class="match-panel">${renderMatchPanel(m.matchNo)}</div>` : ""}
     `;
