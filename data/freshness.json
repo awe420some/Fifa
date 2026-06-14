@@ -1,9 +1,9 @@
 {
-  "writtenAt": "2026-06-14T19:14:04.163Z",
-  "actionRunId": "27509132894",
-  "commit": "645c231cc7f50aee469b1c28760432e6d0711610",
-  "market": "2026-06-14T19:12:55.492Z",
-  "playerProps": "2026-06-14T19:10:57.933Z",
-  "matchOdds": null,
-  "titleHistory": "2026-06-14T19:14:04.108Z"
+  "writtenAt": "2026-06-14T19:21:05.369Z",
+  "actionRunId": "27509316645",
+  "commit": "5384180be359f0ee8ce18670d23e9de4f1d75967",
+  "market": "2026-06-14T19:20:10.528Z",
+  "playerProps": "2026-06-14T19:18:17.952Z",
+  "matchOdds": "2026-06-14T19:20:15.651Z",
+  "titleHistory": "2026-06-14T19:21:05.328Z"
 }
