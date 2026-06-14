@@ -1,0 +1,38 @@
+{
+  "asOf": "2026-06-14",
+  "fetchedAt": "2026-06-14T19:26:39.672Z",
+  "sources": [],
+  "groupSources": [],
+  "unreachable": [
+    {
+      "name": "Polymarket",
+      "reason": "polymarket: parsed fewer than 5 outcomes"
+    },
+    {
+      "name": "Kalshi",
+      "reason": "kalshi: no markets returned"
+    },
+    {
+      "name": "DraftKings",
+      "reason": "draftkings: too few teams"
+    },
+    {
+      "name": "Oddschecker",
+      "reason": "page.goto: Timeout 30000ms exceeded.\nCall log:\n  - navigating to \"https://www.oddschecker.com/football/world-cup/winner\", waiting until \"networkidle\"\n"
+    },
+    {
+      "name": "Polymarket (groups)",
+      "reason": "timeout: Polymarket-groups"
+    }
+  ],
+  "aggregated": {},
+  "titleAggregated": {},
+  "finalsAggregated": {},
+  "semisAggregated": {},
+  "quartersAggregated": {},
+  "r16Aggregated": {},
+  "r32Aggregated": {},
+  "groupWinnerAggregated": {},
+  "topTwoAggregated": {},
+  "method": "Per-source de-vigging (uniform) + logit-mean across sources + final renormalization. Title + group-winner markets actively scraped; finals/semis/QF/R16/top-2 reserved for when bookmaker markets open (~4 weeks pre-kickoff)."
+}
