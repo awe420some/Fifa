@@ -405,7 +405,7 @@ export const NAMES_DE = {
 
 export const I18N = {
   en: {
-    title: "World Cup 2026 — Data Forecast",
+    title: "Brian Bet Brothers",
     subtitle: "Elo-driven Monte-Carlo over 10 000 simulated tournaments. Validated against the 2006–2022 knockout brackets.",
     snapshot: (d) => `Snapshot ${d}`,
     sectionTop3: "Top 3 Favorites",
@@ -758,7 +758,7 @@ export const I18N = {
     statsHost: (h, total) => `${h} of ${total} tournaments went to a host nation.`,
   },
   de: {
-    title: "WM 2026 — Datenprognose",
+    title: "Brian Bet Brothers",
     subtitle: "Elo-getriebene Monte-Carlo-Simulation über 10 000 Turniere. Validiert gegen die K.-o.-Bracketts 2006–2022.",
     snapshot: (d) => `Stand ${d}`,
     sectionTop3: "Top 3 Favoriten",

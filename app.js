@@ -11,7 +11,7 @@ import {
   fitDCOnHistorical, runRPSBacktest, calibrationBins,
   blendWithMarket, flattenHistoricalMatches,
 } from "./predictor.js";
-import { bootstrapDC } from "./models/dixonColes.js";
+import { bootstrapDC, dcScoreProb } from "./models/dixonColes.js";
 import { squadEloAdjustments } from "./models/squad.js";
 import { DEFAULT_WEIGHTS } from "./models/ensemble.js";
 import { aggregateMarket, deVig } from "./models/market.js";
@@ -1040,12 +1040,21 @@ function slotLabel(slot) {
 }
 
 // Compact one-line summary of a match used in lists.
-// The model's single best scoreline guess for a matchup: each team's
-// expected goals (λ) rounded to the nearest whole goal. This is the
-// intuitive "Prognose 2:1" — it tracks the result's magnitude, unlike the
-// raw decimal λ which never reads like an actual score.
-function forecastScore(lambdaA, lambdaB) {
-  return { a: Math.round(lambdaA), b: Math.round(lambdaB) };
+// The model's single best scoreline guess = the MODE of the Dixon-Coles
+// score distribution (argmax over the joint P(x,y)). Uses the same
+// dcScoreProb that powers the "correct score" market, so the Prognose is
+// consistent with the odds/probabilities shown in the panel — not a naive
+// round() of the expected goals.
+function forecastScore(lambdaA, lambdaB, rho = (state.dcParams?.rho || 0)) {
+  const MAX = 6; // the mode is always low-scoring; a 6×6 grid is ample
+  let best = { a: 0, b: 0, p: -Infinity };
+  for (let x = 0; x <= MAX; x++) {
+    for (let y = 0; y <= MAX; y++) {
+      const p = dcScoreProb(x, y, lambdaA, lambdaB, rho);
+      if (p > best.p) best = { a: x, b: y, p };
+    }
+  }
+  return { a: best.a, b: best.b };
 }
 
 function matchSummaryLine(match) {
