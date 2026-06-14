@@ -60,15 +60,16 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          changed=0
+          # Stage every existing snapshot. `git add` catches both modified AND
+          # new (untracked) files — the previous `git diff --quiet` check
+          # silently skipped untracked files, so a freshly-created match-odds.json
+          # never got committed even when the scraper succeeded.
           for f in data/market-snapshot.json data/player-props-2026.json data/match-odds.json data/title-history.json data/freshness.json; do
-            if [ -f "$f" ] && ! git diff --quiet "$f"; then
-              git add "$f"; changed=1
-            fi
+            [ -f "$f" ] && git add "$f"
           done
-          if [ "$changed" = "1" ]; then
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
             git commit -m "Refresh odds + props + forecast snapshot ($(date -u +%Y-%m-%dT%H:%MZ))"
             git push
-          else
-            echo "No changes to commit."
           fi
