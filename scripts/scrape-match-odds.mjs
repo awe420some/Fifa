@@ -22,7 +22,10 @@ const OUTPUT_PATH = resolve(process.cwd(), "data/match-odds.json");
 const SCHEDULE_PATH = resolve(process.cwd(), "data/schedule-2026.json");
 const SPORT = "soccer_fifa_world_cup";
 const REGIONS = "eu,uk,us";
-const MARKETS = "h2h,totals,btts";
+// btts dropped: The Odds API returns HTTP 422 "Markets not supported by this
+// endpoint: btts" for soccer_fifa_world_cup, which aborted the whole call and
+// left matchOdds null. The dashboard never consumed btts anyway.
+const MARKETS = "h2h,totals";
 const ODDS_FORMAT = "decimal";
 
 const API_KEY = process.env.THE_ODDS_API_KEY || "";
