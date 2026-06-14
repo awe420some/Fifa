@@ -185,6 +185,26 @@ export function fitDixonColes(matches, teamCodes, eloMap, opts = {}) {
   }
   recenter(bestParams.attack);
   recenter(bestParams.defense);
+  // Goal-level renormalisation. The unregularised gradient ascent can let the
+  // intercept drift low, collapsing λ to ~0.3/team (median 0.5 goals/match vs
+  // the real-world ~2.6). Re-anchor the intercept so the mean per-team λ over
+  // all pairings hits a realistic baseline. This is a pure level shift in
+  // log-space — it preserves every relative attack/defense strength (and thus
+  // the outcome probabilities' ordering) while fixing the absolute goal count.
+  const TARGET_MEAN_LAMBDA = 1.35;
+  const ccodes = Object.keys(bestParams.attack);
+  let sumLambda = 0, nPair = 0;
+  for (const i of ccodes) {
+    for (const j of ccodes) {
+      if (i === j) continue;
+      sumLambda += Math.exp(bestParams.intercept + bestParams.attack[i] + bestParams.defense[j]);
+      nPair++;
+    }
+  }
+  const meanLambda = nPair ? sumLambda / nPair : 0;
+  if (meanLambda > 1e-6) {
+    bestParams.intercept += Math.log(TARGET_MEAN_LAMBDA / meanLambda);
+  }
   bestParams.logLik = bestLL;
   bestParams.iterations = iterations;
   return bestParams;
