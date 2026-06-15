@@ -10,13 +10,16 @@ const { TEAMS_2026, GROUPS_2026, ELO_2026, MARKET_ODDS_2026,
         HISTORICAL_KNOCKOUTS, HISTORICAL_ELO, NEW_HISTORICAL_MATCHES,
         SQUAD_INDEX_2026 } = await import("../data.js");
 const { runEnsembleMonteCarlo, fitDCOnHistorical, buildCovariateProvider,
-        blendWithMarket } = await import("../predictor.js");
+        blendWithMarket, matchProbs } = await import("../predictor.js");
 const { squadEloAdjustments } = await import("../models/squad.js");
 const { DEFAULT_WEIGHTS } = await import("../models/ensemble.js");
+const { buildAllMatchForecasts } = await import("../models/matchForecast.js");
+const { dcScoreProb } = await import("../models/dixonColes.js");
 
 const HISTORY_PATH = resolve(process.cwd(), "data/title-history.json");
 const SNAPSHOT_PATH = resolve(process.cwd(), "data/market-snapshot.json");
 const SCHEDULE_PATH = resolve(process.cwd(), "data/schedule-2026.json");
+const FORECAST_SNAPSHOT_PATH = resolve(process.cwd(), "data/forecast-snapshot.json");
 const ITERATIONS = 25_000;
 const MAX_HISTORY = 90;
 
@@ -67,3 +70,66 @@ writeFileSync(HISTORY_PATH, JSON.stringify(capped, null, 0));
 
 const top3 = sorted.slice(0, 3).map(([k, v]) => `${k} ${(v * 100).toFixed(1)}%`).join(" · ");
 console.log(`Snapshot for ${today}: ${top3} (${capped.length} points in history)`);
+
+// ─────────── Full forecast snapshot ───────────
+// The browser renders this JSON instantly on load (snapshot-first); it only
+// re-runs the Monte-Carlo when the user changes a Pro-mode scenario toggle.
+// Same inputs as app.js recompute() default scenario (all factors on).
+const fcCtx = {
+  weights: mc.weights || DEFAULT_WEIGHTS,
+  squadDelta, dcParams, eloMap: ELO_2026, hostCodes,
+  options: { useHost: true, useSquad: true, useDC: true, useMarket: true, useCovariates: !!covariateProvider },
+  covariateProvider,
+};
+const probsFn = (a, b) => matchProbs({ code: a }, { code: b }, fcCtx);
+const rho = dcParams?.rho || 0;
+// Predicted scoreline = mode (argmax) of the Dixon-Coles joint distribution,
+// consistent with app.js forecastScore().
+function predScore(lambdaA, lambdaB) {
+  let best = { a: 0, b: 0, p: -Infinity };
+  for (let x = 0; x <= 6; x++) for (let y = 0; y <= 6; y++) {
+    const p = dcScoreProb(x, y, lambdaA, lambdaB, rho);
+    if (p > best.p) best = { a: x, b: y, p };
+  }
+  return { a: best.a, b: best.b };
+}
+const matchForecasts = schedule
+  ? buildAllMatchForecasts(schedule, mc, probsFn, { groupsByLetter: GROUPS_2026 })
+  : new Map();
+const r4 = (n) => +(+n).toFixed(4);
+const perMatch = {};
+for (const [matchNo, fc] of matchForecasts) {
+  const matchups = (fc.matchups || []).map((m) => ({
+    teamA: m.teamA, teamB: m.teamB,
+    matchupProb: r4(m.matchupProb ?? 1),
+    predScore: predScore(m.lambdaA, m.lambdaB),
+    lambdaA: +(+m.lambdaA).toFixed(3), lambdaB: +(+m.lambdaB).toFixed(3),
+    winA: r4(m.winA), draw: r4(m.draw), winB: r4(m.winB),
+    scorersA: m.scorersA.map((s) => ({ name: s.name, prob: r4(s.prob) })),
+    scorersB: m.scorersB.map((s) => ({ name: s.name, prob: r4(s.prob) })),
+    assistsA: m.assistsA.map((s) => ({ name: s.name, prob: r4(s.prob) })),
+    assistsB: m.assistsB.map((s) => ({ name: s.name, prob: r4(s.prob) })),
+  }));
+  perMatch[matchNo] = { stage: fc.stage, matchups };
+}
+// Full (untrimmed) raw MC distributions so the browser can drive every view
+// (incl. "show all 48 teams") and compute its own market-blend + γ client-side.
+const roundAll = (obj) =>
+  Object.fromEntries(Object.entries(obj || {}).map(([k, v]) => [k, +v.toFixed(6)]));
+const forecastSnapshot = {
+  generatedAt: new Date().toISOString(),
+  iterations: ITERATIONS,
+  titleProbability: roundAll(mc.titleProbability),
+  finalsProbability: roundAll(mc.finalsProbability),
+  semisProbability: roundAll(mc.semisProbability),
+  quartersProbability: roundAll(mc.quartersProbability),
+  r16Probability: roundAll(mc.r16Probability),
+  r32Probability: roundAll(mc.r32Probability),
+  groupAdvanceProbability: roundAll(mc.groupAdvanceProbability),
+  groupPositionDistribution: mc.groupPositionDistribution,
+  weights: mc.weights,
+  matchForecasts: perMatch,
+};
+writeFileSync(FORECAST_SNAPSHOT_PATH, JSON.stringify(forecastSnapshot, null, 0));
+const kb = (JSON.stringify(forecastSnapshot).length / 1024).toFixed(0);
+console.log(`Forecast snapshot: ${Object.keys(perMatch).length} matches, ${kb} KB → data/forecast-snapshot.json`);
