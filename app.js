@@ -301,9 +301,15 @@ function renderNextMatch() {
   const meta = el("div", "nm-meta");
   meta.append(el("span", "nm-kicker", de ? "Nächstes Spiel" : "Next match"),
               el("span", "muted small", `${stageLabel}${pick.group ? " " + pick.group : ""} · ${dateStr}`));
-  const fcst = el("div", "nm-forecast");
-  fcst.append(el("span", "muted small", de ? "Prognose" : "Forecast"), el("b", null, `${ps.a}:${ps.b}`), el("span", "muted small", pct(ps.p, 0)));
-  head.append(meta, fcst);
+  head.append(meta);
+
+  // Most-likely scorelines with probabilities — not a single misleading mode.
+  const tops = topScorelines(m.lambdaA, m.lambdaB, undefined, 4);
+  const results = el("div", "nm-results");
+  results.append(el("span", "muted small", de ? "Wahrscheinlichste Ergebnisse" : "Most likely scores"));
+  const rlist = el("div", "nm-result-list");
+  tops.forEach((tp) => { const pill = el("span", "nm-result"); pill.append(el("b", null, `${tp.a}:${tp.b}`), el("span", "muted small", pct(tp.p, 0))); rlist.append(pill); });
+  results.append(rlist);
 
   const teams = el("p", "nm-teams");
   teams.append(document.createTextNode(teamName(m.teamA) + " "), el("span", "muted", "vs"), document.createTextNode(" " + teamName(m.teamB)));
@@ -325,7 +331,7 @@ function renderNextMatch() {
   jump.type = "button";
   jump.dataset.matchJump = String(pick.matchNo);
 
-  wrap.replaceChildren(head, teams, odds, scorers, jump);
+  wrap.replaceChildren(head, teams, results, odds, scorers, jump);
 }
 
 function renderTop3() {
@@ -1141,6 +1147,18 @@ function forecastScore(lambdaA, lambdaB, rho = (state.dcParams?.rho || 0)) {
   return { a: best.a, b: best.b, p: best.p };
 }
 
+// The N most-likely exact scorelines with their probabilities. Showing the
+// single mode ("1:0" for 102/104 matches) reads as broken; the distribution is
+// honest — no scoreline tops ~16%, so we surface the realistic spread.
+function topScorelines(lambdaA, lambdaB, rho = (state.dcParams?.rho || 0), n = 4) {
+  const out = [];
+  for (let x = 0; x <= 6; x++) {
+    for (let y = 0; y <= 6; y++) out.push({ a: x, b: y, p: dcScoreProb(x, y, lambdaA, lambdaB, rho) });
+  }
+  out.sort((p, q) => q.p - p.p);
+  return out.slice(0, n);
+}
+
 function matchSummaryLine(match) {
   const fc = state.matchForecasts?.get(match.matchNo);
   const teams = (() => {
@@ -1206,7 +1224,8 @@ function renderMatchPanel(matchNo) {
   const ps = forecastScore(primary.lambdaA, primary.lambdaB);
   const de = state.locale === "de";
   const predLbl = de ? "Prognose" : "Forecast";
-  const exactLbl = de ? "Wahrscheinlichstes exaktes Ergebnis" : "Most likely exact score";
+  const exactLbl = de ? "Wahrscheinlichste Ergebnisse" : "Most likely scores";
+  const topScores = topScorelines(primary.lambdaA, primary.lambdaB);
   const varianceNote = de
     ? "Fußball ist hochvariabel — das exakte Ergebnis ist nur der wahrscheinlichste Einzelwert, keine sichere Vorhersage. Aussagekräftig sind Siegchance + erwartete Tore."
     : "Football is high-variance — the exact score is just the single most-likely value, not a confident call. The meaningful read is win probability + expected goals.";
@@ -1243,7 +1262,7 @@ function renderMatchPanel(matchNo) {
         <li><span>${escape(teamName(primary.teamB))}</span><b>${pct(primary.winB, 0)}</b></li>
         <li><span>${escape(ex.expGoals || "Expected goals")}</span><b>${primary.lambdaA.toFixed(2)} – ${primary.lambdaB.toFixed(2)}</b></li>
         <li><span>${escape(ex.totalGoals || "Total expected")}</span><b>${(primary.lambdaA + primary.lambdaB).toFixed(2)}</b></li>
-        <li class="pred-row"><span>${escape(exactLbl)}</span><b>${ps.a}:${ps.b} <span class="muted small">${pct(ps.p, 0)}</span></b></li>
+        <li class="pred-row"><span>${escape(exactLbl)}</span><b>${topScores.slice(0, 3).map((tt) => `${tt.a}:${tt.b} <span class="muted small">${pct(tt.p, 0)}</span>`).join(" · ")}</b></li>
       </ul>
       <p class="muted small">${escape(varianceNote)}</p>
     </div>`;

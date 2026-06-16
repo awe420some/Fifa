@@ -124,6 +124,11 @@ body:not(.pro-mode) .pro-only { display: none !important; }
 .nm-scorers p { margin: 5px 0 0; line-height: 1.8; }
 .nm-dot { color: var(--muted); margin: 0 7px; }
 .nm-jump { margin-top: 2px; }
+.nm-results { margin: 0 0 16px; }
+.nm-results > span { display: block; margin-bottom: 7px; }
+.nm-result-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.nm-result { display: inline-flex; align-items: baseline; gap: 5px; background: rgba(var(--accent-rgb),0.10); border: 1px solid rgba(var(--accent-rgb),0.28); border-radius: 999px; padding: 5px 12px; }
+.nm-result b { font-size: 1.1rem; font-weight: 700; }
 .hero h1 {
   font-family: var(--font-display);
   font-size: clamp(2.3rem, 5.6vw, 3.9rem);
