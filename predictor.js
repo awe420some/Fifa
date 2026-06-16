@@ -153,12 +153,25 @@ export function matchProbs(teamA, teamB, ctx) {
   // Squad acts on Elo internally; its "model" contribution is just the
   // Elo prob with squad enabled. We pass eloP twice in that branch.
   const probs = { elo: eloP, dc: dcP, squad: eloP };
+  // Expected goals should reflect the SAME signals as the outcome blend —
+  // especially host advantage, which only lived in the Elo path (the DC λ
+  // ignored the +80 host Elo, leaving host teams' expected goals too low).
+  // Blend Elo-derived λ (incl. host) with the DC λ in the same Elo:DC ratio
+  // as the outcome blend. (Kept only because the goal-likelihood backtest
+  // confirms it doesn't hurt goal prediction.)
+  const covA = covInfo ? Math.exp(covInfo.a) : 1;
+  const covB = covInfo ? Math.exp(covInfo.b) : 1;
+  const eloLamH = expectedGoals(eA, eB, homeAdv) * covA;
+  const eloLamA = expectedGoals(eB, eA, -homeAdv) * covB;
+  const wE = (used.elo || 0) + (used.squad || 0);
+  const wD = used.dc || 0;
+  const lamSum = wE + wD || 1;
   return {
     elo: eloP,
     dc: dcP,
     ensemble: blendOutcome(probs, used),
-    lambdaH: dcP.lambdaH,
-    lambdaA: dcP.lambdaA,
+    lambdaH: (wE * eloLamH + wD * dcP.lambdaH) / lamSum,
+    lambdaA: (wE * eloLamA + wD * dcP.lambdaA) / lamSum,
   };
 }
 
