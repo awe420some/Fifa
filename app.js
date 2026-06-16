@@ -4859,8 +4859,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (stuck && !g.hidden) { g.hidden = true; document.body.classList.remove("auth-locked"); }
   }, 8000);
 
-  requestAnimationFrame(async () => {
-    await new Promise((r) => setTimeout(r, 30));
+  let _booted = false;
+  const boot = async () => {
+    if (_booted) return;
+    _booted = true;
     await bootstrap();
     $("#loading").hidden = true;
     $("#dashboard").hidden = false;
@@ -4885,5 +4887,10 @@ document.addEventListener("DOMContentLoaded", async () => {
       playersToggle.checked = true;
       await computePlayerMC();
     }
-  });
+  };
+  // Fast path: run just after first paint. Fallback: a plain timeout fires
+  // even in a hidden / backgrounded tab (where requestAnimationFrame is
+  // paused), so the dashboard still loads — PWA relaunch, background open, etc.
+  requestAnimationFrame(() => setTimeout(boot, 30));
+  setTimeout(boot, 800);
 });
