@@ -1755,7 +1755,7 @@ function renderAll() {
 
 /* ─────────── Tab navigation ─────────── */
 
-const TAB_NAMES = ["overview", "stages", "markets", "schedule", "players", "bets", "methodology"];
+const TAB_NAMES = ["overview", "schedule", "markets", "players", "bets", "methodology"];
 
 function switchTab(name) {
   if (!TAB_NAMES.includes(name)) name = "overview";
