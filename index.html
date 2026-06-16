@@ -162,6 +162,10 @@
           <span id="account-name" class="account-name"></span>
           <button id="account-logout" class="account-logout" type="button" data-i18n="auth.logout">Abmelden</button>
         </div>
+        <div class="mode-switch" role="group" aria-label="Detailgrad">
+          <button class="mode-btn active" data-mode="simple" type="button">Einfach</button>
+          <button class="mode-btn" data-mode="pro" type="button">Pro</button>
+        </div>
         <div class="lang-switch" role="group" aria-label="Language">
           <button class="lang-btn active" data-lang="en" type="button">EN</button>
           <button class="lang-btn" data-lang="de" type="button">DE</button>
@@ -195,10 +199,14 @@
         <button class="tab-link" data-tab="methodology" type="button" role="tab"><span data-i18n="tabs.methodology">Methodology</span></button>
       </nav>
 
+      <section class="card wide next-match-card" id="next-match-card" data-tab="overview" hidden>
+        <div id="next-match-panel"></div>
+      </section>
+
       <section class="card top3-card" data-tab="overview">
         <h3 data-i18n="sectionTop3">Top 3 Favorites</h3>
         <div id="top3" class="top3-grid"></div>
-        <div class="scenario-row">
+        <div class="scenario-row pro-only">
           <h4 data-i18n="scenarioHeader">Scenario toggles</h4>
           <label><input class="scenario-toggle" type="checkbox" data-toggle="useHost" checked><span data-i18n="scenarioHost">Home advantage</span></label>
           <label><input class="scenario-toggle" type="checkbox" data-toggle="useSquad" checked><span data-i18n="scenarioSquad">Squad strength</span></label>
