@@ -83,6 +83,12 @@ header.hero {
   display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; align-items: center;
   max-width: 62%;
 }
+/* Below desktop the absolute corner placement overlapped the centred title,
+   so its clicks hit the <h1> instead of the buttons. Drop it to a normal
+   centred row above the title — always tappable. */
+@media (max-width: 980px) {
+  .hero-tools { position: static; justify-content: center; max-width: none; margin: 0 auto 16px; }
+}
 .lang-switch { display: flex; gap: 4px; }
 .lang-btn {
   background: transparent; border: 1px solid var(--line);
