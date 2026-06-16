@@ -20,6 +20,7 @@ const HISTORY_PATH = resolve(process.cwd(), "data/title-history.json");
 const SNAPSHOT_PATH = resolve(process.cwd(), "data/market-snapshot.json");
 const SCHEDULE_PATH = resolve(process.cwd(), "data/schedule-2026.json");
 const FORECAST_SNAPSHOT_PATH = resolve(process.cwd(), "data/forecast-snapshot.json");
+const MATCH_ODDS_PATH = resolve(process.cwd(), "data/match-odds.json");
 const ITERATIONS = 25_000;
 const MAX_HISTORY = 90;
 
@@ -93,8 +94,12 @@ function predScore(lambdaA, lambdaB) {
   }
   return { a: best.a, b: best.b };
 }
+const matchOdds = (() => {
+  if (!existsSync(MATCH_ODDS_PATH)) return null;
+  try { return JSON.parse(readFileSync(MATCH_ODDS_PATH, "utf-8")); } catch { return null; }
+})();
 const matchForecasts = schedule
-  ? buildAllMatchForecasts(schedule, mc, probsFn, { groupsByLetter: GROUPS_2026 })
+  ? buildAllMatchForecasts(schedule, mc, probsFn, { groupsByLetter: GROUPS_2026, marketByMatchNo: matchOdds?.matches || null })
   : new Map();
 const r4 = (n) => +(+n).toFixed(4);
 const perMatch = {};
@@ -105,6 +110,7 @@ for (const [matchNo, fc] of matchForecasts) {
     predScore: predScore(m.lambdaA, m.lambdaB),
     lambdaA: +(+m.lambdaA).toFixed(3), lambdaB: +(+m.lambdaB).toFixed(3),
     winA: r4(m.winA), draw: r4(m.draw), winB: r4(m.winB),
+    marketBlended: !!m.marketBlended,
     scorersA: m.scorersA.map((s) => ({ name: s.name, prob: r4(s.prob) })),
     scorersB: m.scorersB.map((s) => ({ name: s.name, prob: r4(s.prob) })),
     assistsA: m.assistsA.map((s) => ({ name: s.name, prob: r4(s.prob) })),

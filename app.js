@@ -1451,6 +1451,7 @@ async function recompute() {
     bootstrapFits: (state.bootstrap && state.bootstrapFits) ? state.bootstrapFits : null,
     iterations: ITERATIONS,
     bootstrapIterations: 5000,
+    marketByMatchNo: state.matchOdds?.matches || null,
   };
   let res;
   try {
@@ -1511,7 +1512,7 @@ function recomputeSync() {
       covariateProvider: state.options.useCovariates ? state.covariateProvider : null,
     };
     const probsFn = (a, b) => matchProbs({ code: a }, { code: b }, ctx);
-    state.matchForecasts = buildAllMatchForecasts(state.schedule, state.mc, probsFn, { groupsByLetter: GROUPS_2026 });
+    state.matchForecasts = buildAllMatchForecasts(state.schedule, state.mc, probsFn, { groupsByLetter: GROUPS_2026, marketByMatchNo: state.matchOdds?.matches || null });
   }
 }
 

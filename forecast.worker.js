@@ -53,7 +53,7 @@ function baseOptsFrom(payload, cov) {
 }
 
 function runMain(payload) {
-  const { schedule, options, bootstrap, bootstrapFits, iterations, bootstrapIterations } = payload;
+  const { schedule, options, bootstrap, bootstrapFits, iterations, bootstrapIterations, marketByMatchNo } = payload;
   const cov = schedule ? buildCovariateProvider(schedule) : null;
   const baseOpts = baseOptsFrom(payload, cov);
   let mc;
@@ -81,7 +81,7 @@ function runMain(payload) {
       covariateProvider: options.useCovariates ? cov : null,
     };
     const probsFn = (a, b) => matchProbs({ code: a }, { code: b }, ctx);
-    matchForecasts = buildAllMatchForecasts(schedule, mc, probsFn, { groupsByLetter: GROUPS_2026 });
+    matchForecasts = buildAllMatchForecasts(schedule, mc, probsFn, { groupsByLetter: GROUPS_2026, marketByMatchNo: marketByMatchNo || null });
   }
   return { mc: slimMc(mc), matchForecasts };
 }
