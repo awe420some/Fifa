@@ -796,6 +796,9 @@ footer.foot {
 .bet-slip.collapsed { width: auto; }
 .bet-slip.collapsed #bet-slip-items,
 .bet-slip.collapsed .bet-slip-summary { display: none; }
+/* Base .bet-slip sets display:flex, which beats the [hidden] attribute — so an
+   empty slip stayed visible and covered the dashboard. Let hidden win. */
+.bet-slip[hidden] { display: none !important; }
 
 @media (max-width: 720px) {
   .bet-slip { right: 0; left: 0; bottom: 0; width: 100%; border-radius: 12px 12px 0 0; }
