@@ -256,6 +256,78 @@ function rankedTitles() {
     .sort((a, b) => b.p - a.p);
 }
 
+// Overview hero: the next not-yet-finished match, with the model's result
+// forecast (honest), win probabilities, expected goals and likely scorers —
+// the prognosis brought to the front. Built with safe DOM methods (textContent),
+// not innerHTML. "Full analysis" jumps to the Schedule tab's interactive panel.
+function renderNextMatch() {
+  const card = $("#next-match-card");
+  const wrap = $("#next-match-panel");
+  if (!card || !wrap) return;
+  if (!state.schedule || !state.matchForecasts) { card.hidden = true; return; }
+  const now = Date.now();
+  const WINDOW = 2.5 * 3600 * 1000; // keep a match "current" up to ~2.5h after kickoff
+  const sorted = state.schedule.slice().sort((a, b) => new Date(a.kickoffUTC) - new Date(b.kickoffUTC));
+  const pick = sorted.find((mm) => {
+    let live = null; try { live = getLiveForSchedule(mm.matchNo); } catch {}
+    if (live && live.status === "finished") return false;
+    const ko = new Date(mm.kickoffUTC).getTime();
+    return isNaN(ko) || ko + WINDOW >= now;
+  }) || sorted[0];
+  const fc = pick ? state.matchForecasts.get(pick.matchNo) : null;
+  const m = fc?.matchups?.[0];
+  if (!pick || !m) { card.hidden = true; return; }
+  card.hidden = false;
+  const de = state.locale === "de";
+  const ps = forecastScore(m.lambdaA, m.lambdaB);
+  const d = new Date(pick.kickoffUTC);
+  const dateStr = isNaN(d.getTime()) ? (pick.date || "")
+    : d.toLocaleString(de ? "de-DE" : "en-GB", { weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+  const stageLabel = (t().stageLabels?.[pick.stage]) || pick.stage;
+
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+  const oc = (label, val) => { const c = el("div", "nm-oc"); c.append(el("span", "muted small", label), el("b", null, val)); return c; };
+  const scorerLine = (arr) => {
+    const p = el("p");
+    if (!arr || !arr.length) { p.textContent = "—"; return p; }
+    arr.slice(0, 3).forEach((s, i) => {
+      if (i) p.append(el("span", "nm-dot", "·"));
+      p.append(document.createTextNode(s.name + " "), el("b", null, pct(s.prob, 0)));
+    });
+    return p;
+  };
+
+  const head = el("div", "nm-head");
+  const meta = el("div", "nm-meta");
+  meta.append(el("span", "nm-kicker", de ? "Nächstes Spiel" : "Next match"),
+              el("span", "muted small", `${stageLabel}${pick.group ? " " + pick.group : ""} · ${dateStr}`));
+  const fcst = el("div", "nm-forecast");
+  fcst.append(el("span", "muted small", de ? "Prognose" : "Forecast"), el("b", null, `${ps.a}:${ps.b}`), el("span", "muted small", pct(ps.p, 0)));
+  head.append(meta, fcst);
+
+  const teams = el("p", "nm-teams");
+  teams.append(document.createTextNode(teamName(m.teamA) + " "), el("span", "muted", "vs"), document.createTextNode(" " + teamName(m.teamB)));
+
+  const odds = el("div", "nm-odds");
+  odds.append(
+    oc(teamName(m.teamA), pct(m.winA, 0)),
+    oc(de ? "Remis" : "Draw", pct(m.draw, 0)),
+    oc(teamName(m.teamB), pct(m.winB, 0)),
+    oc(de ? "Erw. Tore" : "Exp. goals", `${m.lambdaA.toFixed(1)} – ${m.lambdaB.toFixed(1)}`),
+  );
+
+  const scorers = el("div", "nm-scorers");
+  const sA = el("div"); sA.append(el("span", "muted small", `${de ? "Trifft" : "Scores"} · ${teamName(m.teamA)}`), scorerLine(m.scorersA));
+  const sB = el("div"); sB.append(el("span", "muted small", `${de ? "Trifft" : "Scores"} · ${teamName(m.teamB)}`), scorerLine(m.scorersB));
+  scorers.append(sA, sB);
+
+  const jump = el("button", "copy-btn nm-jump", de ? "Volle Analyse →" : "Full analysis →");
+  jump.type = "button";
+  jump.dataset.matchJump = String(pick.matchNo);
+
+  wrap.replaceChildren(head, teams, odds, scorers, jump);
+}
+
 function renderTop3() {
   const ranked = rankedTitles().slice(0, 3);
   $("#top3").innerHTML = ranked.map((row, i) => `
@@ -1642,6 +1714,7 @@ async function bootstrap() {
 
 function renderAll() {
   renderFreshnessBanner();
+  renderNextMatch();
   renderTop3();
   renderModelBreakdown();
   renderDistribution();
@@ -4858,6 +4931,19 @@ document.addEventListener("DOMContentLoaded", async () => {
     renderDistribution();
   });
   setupScenarios();
+
+  // Jump from the "next match" overview card to that match's full panel.
+  document.addEventListener("click", (e) => {
+    const j = e.target.closest && e.target.closest("[data-match-jump]");
+    if (!j) return;
+    const no = Number(j.dataset.matchJump);
+    if (!Number.isFinite(no)) return;
+    state.expandedMatch = no;
+    switchTab("schedule");
+    renderScheduleSection();
+    const row = document.querySelector(`.match-row[data-match-no="${no}"]`);
+    if (row) row.scrollIntoView({ behavior: "smooth", block: "center" });
+  });
 
   // Resolve the login gate IMMEDIATELY, in parallel with the heavy forecast
   // compute below — the login screen must never wait behind the Monte-Carlo.
