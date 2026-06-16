@@ -84,6 +84,18 @@ async function loadMatchOdds() {
   }
 }
 
+async function loadForecastSnapshot() {
+  try {
+    const resp = await fetch("./data/forecast-snapshot.json", { cache: "no-store" });
+    if (!resp.ok) return null;
+    const snap = await resp.json();
+    if (!snap?.matchForecasts || !snap?.titleProbability) return null;
+    return snap;
+  } catch {
+    return null;
+  }
+}
+
 async function loadLive(signal) {
   try {
     const resp = await fetch("/api/live", { cache: "no-store", signal });
@@ -736,7 +748,7 @@ function setupScenarios() {
       state.options[key] = el.checked;
       $("#dashboard").classList.add("recomputing");
       await new Promise((r) => requestAnimationFrame(r));
-      recompute();
+      await recompute();
       renderAll();
       $("#dashboard").classList.remove("recomputing");
       // If player tracking is on, the player projections are stale —
@@ -771,7 +783,7 @@ function setupScenarios() {
         }
       }
       await new Promise((r) => requestAnimationFrame(r));
-      recompute();
+      await recompute();
       renderAll();
       $("#dashboard").classList.remove("recomputing");
     });
@@ -785,7 +797,7 @@ function setupScenarios() {
       state.marketProbs = powerTransform(raw, state.marketGamma);
       $("#dashboard").classList.add("recomputing");
       await new Promise((r) => requestAnimationFrame(r));
-      recompute();
+      await recompute();
       renderAll();
       $("#dashboard").classList.remove("recomputing");
     });
@@ -1054,7 +1066,7 @@ function forecastScore(lambdaA, lambdaB, rho = (state.dcParams?.rho || 0)) {
       if (p > best.p) best = { a: x, b: y, p };
     }
   }
-  return { a: best.a, b: best.b };
+  return { a: best.a, b: best.b, p: best.p };
 }
 
 function matchSummaryLine(match) {
@@ -1094,7 +1106,7 @@ function renderGroupMatchList(letter) {
       <div class="match-row${open ? " expanded" : ""}" data-match-no="${m.matchNo}">
         <span class="match-date">${escape(sum.dateStr)}</span>
         <span class="match-teams">${sum.teams}</span>
-        <span class="match-lambdas">${sum.predScore ? `<b class="pred-pill">${sum.predScore}</b>` : ""}<span class="muted small"> λ ${escape(sum.lambdas)}</span></span>
+        <span class="match-lambdas"><b class="pred-pill" title="${state.locale === "de" ? "erwartete Tore" : "expected goals"}">⌀ ${escape(sum.lambdas)}</b>${sum.predScore ? `<span class="muted small"> ${sum.predScore}</span>` : ""}</span>
       </div>
       ${open ? `<div class="match-panel">${renderMatchPanel(m.matchNo)}</div>` : ""}
     `;
@@ -1120,7 +1132,14 @@ function renderMatchPanel(matchNo) {
   // Model's predicted scoreline ("Prognose 2:1") — shown next to the live
   // score and at the top of the outcome block.
   const ps = forecastScore(primary.lambdaA, primary.lambdaB);
-  const predChip = `<span class="pred-chip">${escape(ex.predicted || "Forecast")} <b>${ps.a}:${ps.b}</b></span>`;
+  const de = state.locale === "de";
+  const predLbl = de ? "Prognose" : "Forecast";
+  const exactLbl = de ? "Wahrscheinlichstes exaktes Ergebnis" : "Most likely exact score";
+  const varianceNote = de
+    ? "Fußball ist hochvariabel — das exakte Ergebnis ist nur der wahrscheinlichste Einzelwert, keine sichere Vorhersage. Aussagekräftig sind Siegchance + erwartete Tore."
+    : "Football is high-variance — the exact score is just the single most-likely value, not a confident call. The meaningful read is win probability + expected goals.";
+  // Show the mode's probability so it's clear the exact score is a low-confidence point.
+  const predChip = `<span class="pred-chip">${predLbl} <b>${ps.a}:${ps.b}</b> <span class="muted small">${pct(ps.p, 0)}</span></span>`;
   // Header
   const d = new Date(match.kickoffUTC);
   const dateStr = isNaN(d.getTime()) ? match.date : d.toISOString().slice(0, 16).replace("T", " ") + " UTC";
@@ -1147,13 +1166,14 @@ function renderMatchPanel(matchNo) {
     <div class="detail-block">
       <h5>${escape(ex.outcome || "Match outcome")}</h5>
       <ul class="detail-list">
-        <li class="pred-row"><span>${escape(ex.predicted || "Forecast")}</span><b>${ps.a}:${ps.b}</b></li>
         <li><span>${escape(teamName(primary.teamA))}</span><b>${pct(primary.winA, 0)}</b></li>
         <li><span>${escape(ex.draw || "Draw")}</span><b>${pct(primary.draw, 0)}</b></li>
         <li><span>${escape(teamName(primary.teamB))}</span><b>${pct(primary.winB, 0)}</b></li>
         <li><span>${escape(ex.expGoals || "Expected goals")}</span><b>${primary.lambdaA.toFixed(2)} – ${primary.lambdaB.toFixed(2)}</b></li>
         <li><span>${escape(ex.totalGoals || "Total expected")}</span><b>${(primary.lambdaA + primary.lambdaB).toFixed(2)}</b></li>
+        <li class="pred-row"><span>${escape(exactLbl)}</span><b>${ps.a}:${ps.b} <span class="muted small">${pct(ps.p, 0)}</span></b></li>
       </ul>
+      <p class="muted small">${escape(varianceNote)}</p>
     </div>`;
   const scorerBlock = (teamCode, scorers) => `
     <div class="detail-block">
@@ -1328,7 +1348,7 @@ function renderScheduleSection() {
         <span class="match-date">${escape(sum.dateStr)}</span>
         <span class="match-stage muted small">${escape(stageLabel)}${m.group ? " · " + m.group : ""}</span>
         <span class="match-teams">${sum.teams}</span>
-        <span class="match-lambdas">${sum.predScore ? `<b class="pred-pill">${sum.predScore}</b>` : ""}<span class="muted small"> λ ${escape(sum.lambdas)}</span></span>
+        <span class="match-lambdas"><b class="pred-pill" title="${state.locale === "de" ? "erwartete Tore" : "expected goals"}">⌀ ${escape(sum.lambdas)}</b>${sum.predScore ? `<span class="muted small"> ${sum.predScore}</span>` : ""}</span>
       </div>
       ${open ? `<div class="match-panel">${renderMatchPanel(m.matchNo)}</div>` : ""}
     `;
@@ -1381,7 +1401,75 @@ function renderHistoryFanChart() {
 
 /* ─────────── Compute pipeline ─────────── */
 
-function recompute() {
+/* ─────────── Forecast Web Worker (keeps the Monte-Carlo off the main thread) ─────────── */
+let _fcWorker = null;            // null = not created yet, false = disabled, Worker = live
+let _fcJobId = 0;
+const _fcJobs = new Map();
+function getForecastWorker() {
+  if (_fcWorker !== null) return _fcWorker || null;
+  try {
+    _fcWorker = new Worker(new URL("./forecast.worker.js", import.meta.url), { type: "module" });
+    _fcWorker.onmessage = (e) => {
+      const { id, ok, result, error } = e.data || {};
+      const job = _fcJobs.get(id);
+      if (!job) return;
+      _fcJobs.delete(id);
+      if (ok) job.resolve(result); else job.reject(new Error(error || "worker error"));
+    };
+    _fcWorker.onerror = () => {
+      for (const [, job] of _fcJobs) job.reject(new Error("forecast worker crashed"));
+      _fcJobs.clear();
+      _fcWorker = false; // fall back to the synchronous path from now on
+    };
+  } catch {
+    _fcWorker = false;
+  }
+  return _fcWorker || null;
+}
+function runForecastJob(type, payload) {
+  const w = getForecastWorker();
+  if (!w) return Promise.reject(new Error("no forecast worker"));
+  const id = ++_fcJobId;
+  return new Promise((resolve, reject) => {
+    _fcJobs.set(id, { resolve, reject });
+    w.postMessage({ id, type, payload });
+  });
+}
+
+// Recompute the forecast for the CURRENT scenario, off the main thread via the
+// worker (falls back to the synchronous path if the worker is unavailable).
+// The initial page load doesn't call this — it paints from the precomputed
+// snapshot (see applyForecastSnapshot); this runs only on scenario / γ /
+// bootstrap changes and the Refresh button.
+async function recompute() {
+  const payload = {
+    schedule: state.schedule,
+    dcParams: state.dcParams,
+    squadDelta: state.squadDelta,
+    options: { ...state.options },
+    bootstrap: !!(state.bootstrap && state.bootstrapFits),
+    bootstrapFits: (state.bootstrap && state.bootstrapFits) ? state.bootstrapFits : null,
+    iterations: ITERATIONS,
+    bootstrapIterations: 5000,
+    marketByMatchNo: state.matchOdds?.matches || null,
+  };
+  let res;
+  try {
+    res = await runForecastJob("main", payload);
+  } catch {
+    recomputeSync();
+    return;
+  }
+  state.mc = res.mc;
+  state.matchForecasts = (res.matchForecasts instanceof Map)
+    ? res.matchForecasts
+    : new Map(Object.entries(res.matchForecasts || {}).map(([k, v]) => [Number(k), v]));
+  state.blendedTitle = state.options.useMarket
+    ? blendWithMarket(state.mc.titleProbability, state.marketProbs || MARKET_ODDS_2026, DEFAULT_WEIGHTS.market)
+    : state.mc.titleProbability;
+}
+
+function recomputeSync() {
   const baseOpts = {
     squadDelta: state.squadDelta,
     dcParams: state.dcParams,
@@ -1424,8 +1512,35 @@ function recompute() {
       covariateProvider: state.options.useCovariates ? state.covariateProvider : null,
     };
     const probsFn = (a, b) => matchProbs({ code: a }, { code: b }, ctx);
-    state.matchForecasts = buildAllMatchForecasts(state.schedule, state.mc, probsFn, { groupsByLetter: GROUPS_2026 });
+    state.matchForecasts = buildAllMatchForecasts(state.schedule, state.mc, probsFn, { groupsByLetter: GROUPS_2026, marketByMatchNo: state.matchOdds?.matches || null });
   }
+}
+
+// Snapshot-first: hydrate state from the precomputed forecast JSON so the
+// dashboard paints instantly on load — no main-thread Monte-Carlo. Mirrors
+// exactly what recompute() produces for the default scenario (all factors on),
+// which is always the initial scenario (options aren't restored from storage).
+// The raw MC distributions are blended with the *current* market client-side,
+// so the headline title odds stay live-accurate.
+function applyForecastSnapshot(snap) {
+  state.mc = {
+    iterations: snap.iterations,
+    titleProbability: snap.titleProbability,
+    finalsProbability: snap.finalsProbability,
+    semisProbability: snap.semisProbability,
+    quartersProbability: snap.quartersProbability,
+    r16Probability: snap.r16Probability,
+    r32Probability: snap.r32Probability,
+    groupAdvanceProbability: snap.groupAdvanceProbability,
+    groupPositionDistribution: snap.groupPositionDistribution,
+    weights: snap.weights || DEFAULT_WEIGHTS,
+  };
+  const mf = new Map();
+  for (const [k, v] of Object.entries(snap.matchForecasts || {})) mf.set(Number(k), v);
+  state.matchForecasts = mf;
+  state.blendedTitle = state.options.useMarket
+    ? blendWithMarket(state.mc.titleProbability, state.marketProbs || MARKET_ODDS_2026, DEFAULT_WEIGHTS.market)
+    : state.mc.titleProbability;
 }
 
 function buildCombinedTournaments() {
@@ -1511,8 +1626,14 @@ async function bootstrap() {
   // 3. RPS backtest + calibration on combined data.
   state.backtest = runRPSBacktest(combined, HISTORICAL_ELO, state.dcParams, state.squadDelta);
   state.calibration = calibrationBins(combined, HISTORICAL_ELO, state.dcParams, 8);
-  // 4. Monte-Carlo for 2026.
-  recompute();
+  // 4. Forecast for 2026 — snapshot-first (instant paint), fall back to a
+  // live main-thread Monte-Carlo only if the precomputed snapshot is missing.
+  state.forecastSnapshot = await loadForecastSnapshot();
+  if (state.forecastSnapshot) {
+    applyForecastSnapshot(state.forecastSnapshot);
+  } else {
+    await recompute();
+  }
   // Diff against the previous visit (localStorage). Must run AFTER
   // recompute() so state.blendedTitle / state.mc exist.
   state.prev = restorePrev();
@@ -1732,7 +1853,7 @@ function wireRefreshButton() {
     if (freshness) state.freshness = freshness;
     if (live) state.live = live;
     if (matchOdds) state.matchOdds = matchOdds;
-    recompute();
+    await recompute();
     state.diff = diffSnapshots(state.prev, cloneCurrentSnapshot());
     state.refreshing = false;
     renderAll();
@@ -4483,23 +4604,36 @@ async function computePlayerMC() {
   // 8 000-iter MC with per-player goal allocation. We trade total
   // iterations for player detail; the main 25 000-MC numbers stay in
   // state.mc and still drive the headline title/stage tables.
-  const playerOpts = {
-    squadDelta: state.squadDelta,
-    dcParams: state.dcParams,
-    covariateProvider: state.covariateProvider,
-    weights: DEFAULT_WEIGHTS,
-    useHost: state.options.useHost,
-    useSquad: state.options.useSquad,
-    useDC: state.options.useDC,
-    useMarket: state.options.useMarket,
-    useCovariates: state.options.useCovariates,
-    trackPlayers: true,
-  };
-  const res = runEnsembleMonteCarlo(
-    TEAMS_2026, GROUPS_2026, hostCodes, ELO_2026,
-    playerOpts, 8000,
-  );
-  state.players = res.players;
+  let players;
+  try {
+    const res = await runForecastJob("players", {
+      schedule: state.schedule,
+      dcParams: state.dcParams,
+      squadDelta: state.squadDelta,
+      options: { ...state.options },
+      iterations: 8000,
+    });
+    players = res.players;
+  } catch {
+    // Fallback: run the per-player MC synchronously on the main thread.
+    const playerOpts = {
+      squadDelta: state.squadDelta,
+      dcParams: state.dcParams,
+      covariateProvider: state.covariateProvider,
+      weights: DEFAULT_WEIGHTS,
+      useHost: state.options.useHost,
+      useSquad: state.options.useSquad,
+      useDC: state.options.useDC,
+      useMarket: state.options.useMarket,
+      useCovariates: state.options.useCovariates,
+      trackPlayers: true,
+    };
+    players = runEnsembleMonteCarlo(
+      TEAMS_2026, GROUPS_2026, hostCodes, ELO_2026,
+      playerOpts, 8000,
+    ).players;
+  }
+  state.players = players;
   $("#players-team-pick").hidden = false;
   populatePlayersTeamSelect();
   renderPlayers();

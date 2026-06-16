@@ -163,12 +163,62 @@ function resolveWinnerLoser(distA, distB, isWin, matchProbsFn) {
 //     scorersA: [{name, prob, expGoals}], scorersB: [...],
 //     assistsA: [{name, prob}], assistsB: [...],
 //     minuteBins: GOAL_MINUTE_BINS (kept global) }
-function forecastMatchup(teamA, teamB, sharesByCode, matchProbsFn) {
+// Invert P(over 2.5 goals) into the implied total expected goals μ, assuming
+// total goals ~ Poisson(μ). P(N>=3) = 1 - e^-μ(1 + μ + μ²/2) is monotonic in μ,
+// so a short bisection recovers μ from the market's over/under line.
+const MARKET_BLEND = 0.85;   // how hard to anchor toward the de-vigged consensus
+function totalGoalsFromOver25(pOver) {
+  if (pOver == null || pOver <= 0.001) return 1.5;
+  if (pOver >= 0.999) return 6.0;
+  let lo = 0.2, hi = 8;
+  for (let i = 0; i < 40; i++) {
+    const mid = (lo + hi) / 2;
+    const pGE3 = 1 - Math.exp(-mid) * (1 + mid + (mid * mid) / 2);
+    if (pGE3 < pOver) lo = mid; else hi = mid;
+  }
+  return (lo + hi) / 2;
+}
+
+function forecastMatchup(teamA, teamB, sharesByCode, matchProbsFn, market) {
   const res = matchProbsFn(teamA, teamB);
   if (!res) return null;
-  const lambdaA = res.lambdaH || 0;
-  const lambdaB = res.lambdaA || 0;
-  const { home, draw, away } = res.ensemble || res;
+  let lambdaA = res.lambdaH || 0;
+  let lambdaB = res.lambdaA || 0;
+  let { home, draw, away } = res.ensemble || res;
+  let marketBlended = false;
+  // Market anchor: the de-vigged 46-bookmaker consensus is the sharpest
+  // probability available — it already prices in lineups, form, stakes, etc.
+  // Blend the model heavily toward it where per-match odds exist, and pull the
+  // expected-goals LEVEL to the market's over/under-implied total (keeping the
+  // model's team split). Scorer probabilities then follow the adjusted λ.
+  if (market && market.home != null && market.away != null) {
+    // Align the market's home/away to (teamA, teamB) — guard against a swapped
+    // odds orientation; skip the blend entirely if the teams don't match.
+    let mHome = market.home, mAway = market.away;
+    let ok = true;
+    if (market.teamA && market.teamB) {
+      if (market.teamA === teamA && market.teamB === teamB) { /* aligned */ }
+      else if (market.teamA === teamB && market.teamB === teamA) { mHome = market.away; mAway = market.home; }
+      else { ok = false; }
+    }
+    if (ok) {
+      marketBlended = true;
+      const W = MARKET_BLEND;
+      home = W * mHome + (1 - W) * home;
+      draw = W * (market.draw ?? draw) + (1 - W) * draw;
+      away = W * mAway + (1 - W) * away;
+      const s = home + draw + away || 1;
+      home /= s; draw /= s; away /= s;
+      if (market.over25 != null) {
+        const muMkt = totalGoalsFromOver25(market.over25);
+        const muModel = lambdaA + lambdaB;
+        if (muModel > 0) {
+          const r = (W * muMkt + (1 - W) * muModel) / muModel;
+          lambdaA *= r; lambdaB *= r;
+        }
+      }
+    }
+  }
   const sharesA = sharesByCode.get(teamA);
   const sharesB = sharesByCode.get(teamB);
   const scorersA = topPlayers(sharesA?.goal, lambdaA, 6);
@@ -184,6 +234,7 @@ function forecastMatchup(teamA, teamB, sharesByCode, matchProbsFn) {
     eGoalsTotal: lambdaA + lambdaB,
     scorersA, scorersB,
     assistsA, assistsB,
+    marketBlended,
   };
 }
 
@@ -208,9 +259,12 @@ function topPlayers(shares, lambda, topN) {
 // For a KO match: enumerates top-3 (teamA, teamB) pairings by joint
 // slot-probability and returns one forecast per matchup, sorted by joint p.
 function forecastMatch(match, ctx) {
-  const { groupsByLetter, groupPos, mc, schedule, matchProbsFn, sharesByCode, slotCache, groupOf } = ctx;
+  const { groupsByLetter, groupPos, mc, schedule, matchProbsFn, sharesByCode, slotCache, groupOf, marketByMatchNo } = ctx;
   if (match.stage === "group") {
-    const fc = forecastMatchup(match.teamA, match.teamB, sharesByCode, matchProbsFn);
+    // Group matches have fixed teams, so per-match market odds (keyed by
+    // matchNo) line up exactly with this matchup — anchor to them.
+    const market = marketByMatchNo ? marketByMatchNo[match.matchNo] : null;
+    const fc = forecastMatchup(match.teamA, match.teamB, sharesByCode, matchProbsFn, market);
     if (!fc) return { stage: "group", matchups: [] };
     return { stage: "group", matchups: [{ ...fc, matchupProb: 1 }] };
   }
@@ -264,6 +318,7 @@ export function buildAllMatchForecasts(schedule, mc, makeMatchProbs, options = {
     sharesByCode,
     slotCache,
     groupOf,
+    marketByMatchNo: options.marketByMatchNo || null,
   };
   const out = new Map();
   for (const m of schedule) {
