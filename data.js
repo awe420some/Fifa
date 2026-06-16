@@ -406,7 +406,7 @@ export const NAMES_DE = {
 export const I18N = {
   en: {
     title: "Brian Bet Brothers",
-    subtitle: "Elo-driven Monte-Carlo over 10 000 simulated tournaments. Validated against the 2006–2022 knockout brackets.",
+    subtitle: "Elo-driven Monte-Carlo over 25 000 simulated tournaments. Validated against the 2006–2022 knockout brackets.",
     snapshot: (d) => `Snapshot ${d}`,
     sectionTop3: "Top 3 Favorites",
     sectionDistribution: "Full Title Probability",
@@ -749,7 +749,7 @@ export const I18N = {
     calibrationHeader: "Match-level calibration",
     referencesHeader: "Academic references",
     modelBreakdownHeader: "Model breakdown (top 5)",
-    methodologyBlurb: "Each match is sampled twice from a Poisson distribution whose mean is the team's expected goals: μ = 1.42 + 0.55·(Elo − Opp + Host)/400. Home support is +80 Elo for matches played in the supporter's country. Group ties resolve on points → goal-diff → goals-for; knockout ties resolve via Elo-dampened shootout. 10 000 simulated tournaments aggregate to the empirical probability distribution shown.",
+    methodologyBlurb: "Each match is sampled twice from a Poisson distribution whose mean is the team's expected goals: μ = 1.42 + 0.55·(Elo − Opp + Host)/400. Home support is +80 Elo for matches played in the supporter's country. Group ties resolve on points → goal-diff → goals-for; knockout ties resolve via Elo-dampened shootout. 25 000 simulated tournaments aggregate to the empirical probability distribution shown.",
     limitations: "Limitations",
     limitationsBody: "Pre-tournament Elos for the 1994–2022 backtest are rounded reconstructions, accurate to ±25 Elo — fine for top-3 ranking, not for fine-grained log-loss calibration. Player-level injuries/form are not modelled — strength sits at the team-Elo level. Bookmaker market is built from two reachable sources (Polymarket + FoxSports); five other books (Pinnacle, Bet365, DraftKings, Kalshi, Smarkets) are geo- or bot-blocked from this runtime and would need a paid odds-API key to integrate.",
     footer: "Built on public Elo + market data · educational use, not for betting.",
@@ -759,7 +759,7 @@ export const I18N = {
   },
   de: {
     title: "Brian Bet Brothers",
-    subtitle: "Elo-getriebene Monte-Carlo-Simulation über 10 000 Turniere. Validiert gegen die K.-o.-Bracketts 2006–2022.",
+    subtitle: "Elo-getriebene Monte-Carlo-Simulation über 25 000 Turniere. Validiert gegen die K.-o.-Bracketts 2006–2022.",
     snapshot: (d) => `Stand ${d}`,
     sectionTop3: "Top 3 Favoriten",
     sectionDistribution: "Volle Titelwahrscheinlichkeit",
@@ -1102,7 +1102,7 @@ export const I18N = {
     calibrationHeader: "Spiel-Kalibrierung",
     referencesHeader: "Wissenschaftliche Quellen",
     modelBreakdownHeader: "Modell-Aufschlüsselung (Top 5)",
-    methodologyBlurb: "Jedes Spiel wird zweifach aus einer Poisson-Verteilung gezogen, deren Mittelwert μ = 1,42 + 0,55·(Elo − Gegner + Heim)/400 die erwarteten Tore ist. Heimvorteil +80 Elo für Spiele im Land des Teams. Gruppen-Gleichstand: Punkte → Tordifferenz → Tore. K.-o.-Gleichstand: Elo-gedämpftes Elfmeterschießen. 10 000 simulierte Turniere ergeben die gezeigte empirische Wahrscheinlichkeitsverteilung.",
+    methodologyBlurb: "Jedes Spiel wird zweifach aus einer Poisson-Verteilung gezogen, deren Mittelwert μ = 1,42 + 0,55·(Elo − Gegner + Heim)/400 die erwarteten Tore ist. Heimvorteil +80 Elo für Spiele im Land des Teams. Gruppen-Gleichstand: Punkte → Tordifferenz → Tore. K.-o.-Gleichstand: Elo-gedämpftes Elfmeterschießen. 25 000 simulierte Turniere ergeben die gezeigte empirische Wahrscheinlichkeitsverteilung.",
     limitations: "Grenzen des Modells",
     limitationsBody: "Pre-Turnier-Elos für den 1994–2022-Backtest sind gerundete Rekonstruktionen mit ±25 Genauigkeit — ausreichend für Top-3-Ranking, nicht für feine Log-Loss-Kalibrierung. Verletzungen / Tagesform einzelner Spieler werden nicht modelliert — Stärke bleibt auf Mannschafts-Elo-Ebene. Marktdaten kommen aus zwei erreichbaren Quellen (Polymarket + FoxSports); fünf weitere Buchmacher (Pinnacle, Bet365, DraftKings, Kalshi, Smarkets) sind aus dieser Laufzeitumgebung geo- oder bot-geblockt und bräuchten einen kostenpflichtigen Odds-API-Schlüssel.",
     footer: "Basierend auf öffentlichen Elo- und Marktdaten · Bildungszweck, nicht zum Wetten.",
