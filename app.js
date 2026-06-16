@@ -1066,7 +1066,7 @@ function forecastScore(lambdaA, lambdaB, rho = (state.dcParams?.rho || 0)) {
       if (p > best.p) best = { a: x, b: y, p };
     }
   }
-  return { a: best.a, b: best.b };
+  return { a: best.a, b: best.b, p: best.p };
 }
 
 function matchSummaryLine(match) {
@@ -1106,7 +1106,7 @@ function renderGroupMatchList(letter) {
       <div class="match-row${open ? " expanded" : ""}" data-match-no="${m.matchNo}">
         <span class="match-date">${escape(sum.dateStr)}</span>
         <span class="match-teams">${sum.teams}</span>
-        <span class="match-lambdas">${sum.predScore ? `<b class="pred-pill">${sum.predScore}</b>` : ""}<span class="muted small"> λ ${escape(sum.lambdas)}</span></span>
+        <span class="match-lambdas"><b class="pred-pill" title="${state.locale === "de" ? "erwartete Tore" : "expected goals"}">⌀ ${escape(sum.lambdas)}</b>${sum.predScore ? `<span class="muted small"> ${sum.predScore}</span>` : ""}</span>
       </div>
       ${open ? `<div class="match-panel">${renderMatchPanel(m.matchNo)}</div>` : ""}
     `;
@@ -1132,7 +1132,14 @@ function renderMatchPanel(matchNo) {
   // Model's predicted scoreline ("Prognose 2:1") — shown next to the live
   // score and at the top of the outcome block.
   const ps = forecastScore(primary.lambdaA, primary.lambdaB);
-  const predChip = `<span class="pred-chip">${escape(ex.predicted || "Forecast")} <b>${ps.a}:${ps.b}</b></span>`;
+  const de = state.locale === "de";
+  const predLbl = de ? "Prognose" : "Forecast";
+  const exactLbl = de ? "Wahrscheinlichstes exaktes Ergebnis" : "Most likely exact score";
+  const varianceNote = de
+    ? "Fußball ist hochvariabel — das exakte Ergebnis ist nur der wahrscheinlichste Einzelwert, keine sichere Vorhersage. Aussagekräftig sind Siegchance + erwartete Tore."
+    : "Football is high-variance — the exact score is just the single most-likely value, not a confident call. The meaningful read is win probability + expected goals.";
+  // Show the mode's probability so it's clear the exact score is a low-confidence point.
+  const predChip = `<span class="pred-chip">${predLbl} <b>${ps.a}:${ps.b}</b> <span class="muted small">${pct(ps.p, 0)}</span></span>`;
   // Header
   const d = new Date(match.kickoffUTC);
   const dateStr = isNaN(d.getTime()) ? match.date : d.toISOString().slice(0, 16).replace("T", " ") + " UTC";
@@ -1159,13 +1166,14 @@ function renderMatchPanel(matchNo) {
     <div class="detail-block">
       <h5>${escape(ex.outcome || "Match outcome")}</h5>
       <ul class="detail-list">
-        <li class="pred-row"><span>${escape(ex.predicted || "Forecast")}</span><b>${ps.a}:${ps.b}</b></li>
         <li><span>${escape(teamName(primary.teamA))}</span><b>${pct(primary.winA, 0)}</b></li>
         <li><span>${escape(ex.draw || "Draw")}</span><b>${pct(primary.draw, 0)}</b></li>
         <li><span>${escape(teamName(primary.teamB))}</span><b>${pct(primary.winB, 0)}</b></li>
         <li><span>${escape(ex.expGoals || "Expected goals")}</span><b>${primary.lambdaA.toFixed(2)} – ${primary.lambdaB.toFixed(2)}</b></li>
         <li><span>${escape(ex.totalGoals || "Total expected")}</span><b>${(primary.lambdaA + primary.lambdaB).toFixed(2)}</b></li>
+        <li class="pred-row"><span>${escape(exactLbl)}</span><b>${ps.a}:${ps.b} <span class="muted small">${pct(ps.p, 0)}</span></b></li>
       </ul>
+      <p class="muted small">${escape(varianceNote)}</p>
     </div>`;
   const scorerBlock = (teamCode, scorers) => `
     <div class="detail-block">
@@ -1340,7 +1348,7 @@ function renderScheduleSection() {
         <span class="match-date">${escape(sum.dateStr)}</span>
         <span class="match-stage muted small">${escape(stageLabel)}${m.group ? " · " + m.group : ""}</span>
         <span class="match-teams">${sum.teams}</span>
-        <span class="match-lambdas">${sum.predScore ? `<b class="pred-pill">${sum.predScore}</b>` : ""}<span class="muted small"> λ ${escape(sum.lambdas)}</span></span>
+        <span class="match-lambdas"><b class="pred-pill" title="${state.locale === "de" ? "erwartete Tore" : "expected goals"}">⌀ ${escape(sum.lambdas)}</b>${sum.predScore ? `<span class="muted small"> ${sum.predScore}</span>` : ""}</span>
       </div>
       ${open ? `<div class="match-panel">${renderMatchPanel(m.matchNo)}</div>` : ""}
     `;
