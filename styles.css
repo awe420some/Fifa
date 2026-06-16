@@ -94,6 +94,19 @@ header.hero {
   background: var(--accent); color: var(--bg-0);
   border-color: var(--accent); font-weight: 700;
 }
+.mode-switch { display: flex; gap: 4px; }
+.mode-btn {
+  background: transparent; border: 1px solid var(--line);
+  color: var(--muted); padding: 4px 12px; border-radius: 8px;
+  cursor: pointer; font-size: 0.8rem; letter-spacing: 0.5px;
+}
+.mode-btn:hover { color: var(--text); }
+.mode-btn.active {
+  background: var(--accent); color: var(--bg-0);
+  border-color: var(--accent); font-weight: 700;
+}
+/* Progressive disclosure: advanced/jargon controls only show in Pro mode. */
+body:not(.pro-mode) .pro-only { display: none !important; }
 .hero h1 {
   font-family: var(--font-display);
   font-size: clamp(2.3rem, 5.6vw, 3.9rem);

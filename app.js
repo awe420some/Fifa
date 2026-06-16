@@ -4820,6 +4820,21 @@ function initAccent() {
   document.querySelectorAll(".accent-dot").forEach((d) => d.addEventListener("click", () => applyAccent(d.dataset.accent)));
 }
 
+// Einfach / Pro — progressive disclosure. Simple mode (default) hides the
+// model jargon (scenario toggles, γ, bootstrap); Pro reveals it.
+function applyMode(m) {
+  const pro = m === "pro";
+  document.body.classList.toggle("pro-mode", pro);
+  try { localStorage.setItem("wc26_mode", pro ? "pro" : "simple"); } catch {}
+  document.querySelectorAll(".mode-btn").forEach((b) => b.classList.toggle("active", (b.dataset.mode === "pro") === pro));
+}
+function initMode() {
+  let saved = null;
+  try { saved = localStorage.getItem("wc26_mode"); } catch {}
+  applyMode(saved === "pro" ? "pro" : "simple");
+  document.querySelectorAll(".mode-btn").forEach((b) => b.addEventListener("click", () => applyMode(b.dataset.mode)));
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   // Register the PWA service worker so the app is installable + works
   // offline. Fail-safe: any error (private mode, SW disabled) is swallowed
@@ -4830,6 +4845,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   applyI18n();
   initTheme();
   initAccent();
+  initMode();
   $$(".lang-btn").forEach((b) => b.addEventListener("click", () => {
     state.locale = b.dataset.lang;
     document.documentElement.lang = state.locale;
