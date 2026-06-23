@@ -1,6 +1,6 @@
 {
-  "asOf": "2026-06-22",
-  "fetchedAt": "2026-06-23T00:01:06.093Z",
+  "asOf": "2026-06-23",
+  "fetchedAt": "2026-06-23T03:40:14.191Z",
   "sources": [],
   "groupSources": [],
   "unreachable": [
@@ -18,11 +18,11 @@
     },
     {
       "name": "Oddschecker",
-      "reason": "page.goto: Timeout 30000ms exceeded.\nCall log:\n  - navigating to \"https://www.oddschecker.com/football/world-cup/winner\", waiting until \"networkidle\"\n"
+      "reason": "oddschecker: too few teams"
     },
     {
       "name": "Polymarket (groups)",
-      "reason": "polymarket-groups: too few teams"
+      "reason": "timeout: Polymarket-groups"
     }
   ],
   "aggregated": {},
