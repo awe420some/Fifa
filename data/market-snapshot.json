@@ -1,6 +1,6 @@
 {
   "asOf": "2026-07-10",
-  "fetchedAt": "2026-07-10T11:54:15.786Z",
+  "fetchedAt": "2026-07-10T13:57:22.396Z",
   "sources": [],
   "groupSources": [],
   "unreachable": [
@@ -22,7 +22,7 @@
     },
     {
       "name": "Polymarket (groups)",
-      "reason": "timeout: Polymarket-groups"
+      "reason": "polymarket-groups: too few teams"
     }
   ],
   "aggregated": {},
