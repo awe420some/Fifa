@@ -1,12 +1,12 @@
 {
   "asOf": "2026-07-31",
-  "fetchedAt": "2026-07-31T13:30:54.864Z",
+  "fetchedAt": "2026-07-31T15:54:49.831Z",
   "sources": [],
   "groupSources": [],
   "unreachable": [
     {
       "name": "Polymarket",
-      "reason": "page.goto: Timeout 45000ms exceeded.\nCall log:\n  - navigating to \"https://polymarket.com/event/2026-fifa-world-cup-winner-595\", waiting until \"networkidle\"\n"
+      "reason": "polymarket: parsed fewer than 5 outcomes"
     },
     {
       "name": "Kalshi",
